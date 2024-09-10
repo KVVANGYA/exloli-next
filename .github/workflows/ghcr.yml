@@ -16,6 +16,14 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v1
 
+      - name: Cache Docker layers
+        uses: actions/cache@v2
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v2
         with:
@@ -26,14 +34,10 @@ jobs:
       - name: Extract metadata (tags, labels) for Docker
         id: meta
         run: |
-          # 使用当前日期时间作为标签的一部分
           DATE_TAG=$(date +'%Y%m%d%H%M%S')
-          # 使用 Git 提交哈希作为标签的一部分
           GIT_SHA=$(git rev-parse --short HEAD)
-          # 设置输出变量
           echo "date_tag=${DATE_TAG}" >> $GITHUB_ENV
           echo "git_sha=${GIT_SHA}" >> $GITHUB_ENV
-          # 将仓库名称转换为小写
           REPO_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           echo "repo_name=${REPO_NAME}" >> $GITHUB_ENV
 
@@ -46,3 +50,5 @@ jobs:
             ghcr.io/${{ env.repo_name }}:latest
             ghcr.io/${{ env.repo_name }}:${{ env.date_tag }}
             ghcr.io/${{ env.repo_name }}:${{ env.git_sha }}
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache
