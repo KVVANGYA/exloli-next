@@ -4,12 +4,14 @@ use tokio::io::AsyncReadExt;
 
 pub struct S3Uploader {
     client: Client,
+    gateway_host: String,
+    gateway_date: String,
 }
 
 impl S3Uploader {
-    pub fn new() -> Result<Self> {
+    pub fn new(gateway_host: String, gateway_date: String) -> Result<Self> {
         let client = Client::new();
-        Ok(Self { client })
+        Ok(Self { client, gateway_host, gateway_date })
     }
 
     pub async fn upload<R: AsyncReadExt + Unpin>(
@@ -33,7 +35,7 @@ impl S3Uploader {
             .await?;
 
         let hash = response["Hash"].as_str().ok_or(anyhow::anyhow!("Invalid response"))?;
-        let url = format!("https://ipfs.io/ipfs/{}", hash);
+        let url = format!("{}{}/?{}", self.gateway_host, hash, self.gateway_date);
 
         Ok(url)
     }

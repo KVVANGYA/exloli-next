@@ -58,3 +58,7 @@ access_key = "ak"
 secret_key = "sk"
 # 桶绑定的域名
 host = "example.com"
+
+[ipfs]
+gateway_host = "https://ipfs.io/ipfs/"
+gateway_date = "1"
