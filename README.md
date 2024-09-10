@@ -1,6 +1,6 @@
 # exloli-next
 
-因为受不了当初乱写代码的自己而重写的新一代的 exloli 客户端
+forked from lolishinshi/exloli-next
 
 ## 安装
 
