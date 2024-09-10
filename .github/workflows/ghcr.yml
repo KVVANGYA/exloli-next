@@ -31,8 +31,11 @@ jobs:
           # 使用 Git 提交哈希作为标签的一部分
           GIT_SHA=$(git rev-parse --short HEAD)
           # 设置输出变量
-          echo "::set-output name=date_tag::$DATE_TAG"
-          echo "::set-output name=git_sha::$GIT_SHA"
+          echo "date_tag=${DATE_TAG}" >> $GITHUB_ENV
+          echo "git_sha=${GIT_SHA}" >> $GITHUB_ENV
+          # 将仓库名称转换为小写
+          REPO_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "repo_name=${REPO_NAME}" >> $GITHUB_ENV
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v2
@@ -40,6 +43,6 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.date_tag }}
-            ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.git_sha }}
+            ghcr.io/${{ env.repo_name }}:latest
+            ghcr.io/${{ env.repo_name }}:${{ env.date_tag }}
+            ghcr.io/${{ env.repo_name }}:${{ env.git_sha }}
