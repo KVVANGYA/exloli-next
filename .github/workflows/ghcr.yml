@@ -1,0 +1,45 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        run: |
+          # 使用当前日期时间作为标签的一部分
+          DATE_TAG=$(date +'%Y%m%d%H%M%S')
+          # 使用 Git 提交哈希作为标签的一部分
+          GIT_SHA=$(git rev-parse --short HEAD)
+          # 设置输出变量
+          echo "::set-output name=date_tag::$DATE_TAG"
+          echo "::set-output name=git_sha::$GIT_SHA"
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.date_tag }}
+            ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.git_sha }}
