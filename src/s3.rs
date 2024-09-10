@@ -1,35 +1,40 @@
-use crate::config::S3;
-use s3::creds::Credentials;
-use s3::error::S3Error;
-use s3::{Bucket, Region};
-use tokio::io::AsyncRead;
+use anyhow::Result;
+use reqwest::Client;
+use tokio::io::AsyncReadExt;
 
 pub struct S3Uploader {
-    bucket: Box<Bucket>,
+    client: Client,
 }
 
 impl S3Uploader {
-    pub fn new(s3: &S3) -> Result<Self, S3Error> {
-        let region = Region::Custom { region: s3.region.clone(), endpoint: s3.endpoint.clone() };
-        let credentials =
-            Credentials::new(Some(&s3.access_key), Some(&s3.secret_key), None, None, None)?;
-        let bucket = Bucket::new(&s3.bucket, region, credentials)?;
-        Ok(Self { bucket })
+    pub fn new() -> Result<Self> {
+        let client = Client::new();
+        Ok(Self { client })
     }
 
-    pub async fn upload<R: AsyncRead + Unpin>(
+    pub async fn upload<R: AsyncReadExt + Unpin>(
         &self,
         name: &str,
         reader: &mut R,
-    ) -> Result<(), S3Error> {
-        let content_type = if name.ends_with(".jpg") {
-            "image/jpeg"
-        } else if name.ends_with(".png") {
-            "image/png"
-        } else {
-            unreachable!()
-        };
-        self.bucket.put_object_stream_with_content_type(reader, name, content_type).await?;
-        Ok(())
+    ) -> Result<String> {
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).await?;
+
+        let form = reqwest::multipart::Form::new()
+            .part("file", reqwest::multipart::Part::bytes(buffer).file_name(name.to_string()));
+
+        let response = self
+            .client
+            .post("https://api.img2ipfs.org/api/v0/add?pin=false")
+            .multipart(form)
+            .send()
+            .await?
+            .json::<serde_json::Value>()
+            .await?;
+
+        let hash = response["Hash"].as_str().ok_or(anyhow::anyhow!("Invalid response"))?;
+        let url = format!("https://ipfs.io/ipfs/{}", hash);
+
+        Ok(url)
     }
 }
