@@ -218,7 +218,10 @@ impl ExloliUploader {
         );
 
         // 依次将图片下载并上传到 r2，并插入 ImageEntity 和 PageEntity 记录
-        let s3 = S3Uploader::new()?;
+        let s3 = S3Uploader::new(
+            self.config.ipfs.gateway_host.clone(),
+            self.config.ipfs.gateway_date.clone(),
+        )?;
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(30))
