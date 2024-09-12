@@ -31,6 +31,7 @@ pub struct ExloliUploader {
     bot: Bot,
     config: Config,
     trans: EhTagTransDB,
+    s3: S3Uploader,
 }
 
 impl ExloliUploader {
@@ -45,7 +46,8 @@ impl ExloliUploader {
             .access_token(&config.telegraph.access_token)
             .create()
             .await?;
-        Ok(Self { ehentai, config, telegraph, bot, trans })
+        let s3 = S3Uploader::new(config.ipfs.clone())?;
+        Ok(Self { ehentai, config, telegraph, bot, trans, s3 })
     }
 
     /// 每隔 interval 分钟检查一次
@@ -218,10 +220,7 @@ impl ExloliUploader {
         );
 
         // 依次将图片下载并上传到 r2，并插入 ImageEntity 和 PageEntity 记录
-        let s3 = S3Uploader::new(
-            self.config.ipfs.gateway_host.clone(),
-            self.config.ipfs.gateway_date.clone(),
-        )?;
+        let s3 = self.s3.clone();
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(30))
@@ -236,10 +235,16 @@ impl ExloliUploader {
                     let filename = format!("{}.{}", page.hash(), suffix);
                     let bytes = client.get(url).send().await?.bytes().await?;
                     debug!("已下载: {}", page.page());
-                    let url = s3.upload(&filename, &mut bytes.as_ref()).await?;
-                    debug!("已上传: {}", page.page());
-                    ImageEntity::create(fileindex, page.hash(), &url).await?;
-                    PageEntity::create(page.gallery_id(), page.page(), fileindex).await?;
+                    match s3.upload(&filename, &mut bytes.as_ref()).await {
+                        Ok(url) => {
+                            debug!("已上传: {}", page.page());
+                            ImageEntity::create(fileindex, page.hash(), &url).await?;
+                            PageEntity::create(page.gallery_id(), page.page(), fileindex).await?;
+                        },
+                        Err(e) => {
+                            error!("上传失败 (页面 {}): {}", page.page(), e);
+                        }
+                    }
                 }
                 Result::<()>::Ok(())
             }
@@ -300,6 +305,11 @@ impl ExloliUploader {
         text.push_str(&format!("{}: {}", code_inline("原始地址"), gallery.url().url()));
 
         Ok(text)
+    }
+
+    async fn verify_image_accessibility(&self, url: &str) -> Result<()> {
+        self.ehentai.client.head(url).send().await?.error_for_status()?;
+        Ok(())
     }
 }
 
