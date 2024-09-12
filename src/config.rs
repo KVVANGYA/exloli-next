@@ -82,6 +82,7 @@ pub struct S3 {
 pub struct Ipfs {
     pub gateway_host: String,
     pub gateway_date: String,
+    pub enable_double_check: bool,
 }
 
 impl Config {
