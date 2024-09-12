@@ -1,8 +1,10 @@
 use reqwest::Client;
 use anyhow::{Result, anyhow};
 use tokio::time::{sleep, Duration};
+use tokio::io::AsyncReadExt;
 use crate::config::Ipfs as IpfsConfig;
 
+#[derive(Clone)]
 pub struct S3Uploader {
     client: Client,
     config: IpfsConfig,
