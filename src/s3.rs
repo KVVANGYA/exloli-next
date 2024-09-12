@@ -4,7 +4,7 @@ use tokio::time::{sleep, Duration};
 use tokio::io::AsyncReadExt;
 use crate::config::Ipfs as IpfsConfig;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct S3Uploader {
     client: Client,
     config: IpfsConfig,
