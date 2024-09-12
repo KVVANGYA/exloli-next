@@ -242,6 +242,10 @@ impl EhClient {
         let resp = send!(self.0.get(url))?;
         Ok((fileindex, resp.bytes().await?.to_vec()))
     }
+
+    pub fn get_client(&self) -> &Client {
+        &self.0
+    }
 }
 
 fn extract_fileindex(url: &str) -> Option<u32> {
