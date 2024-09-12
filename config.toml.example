@@ -61,4 +61,5 @@ host = "example.com"
 
 [ipfs]
 gateway_host = "https://ipfs.io/ipfs/"
-gateway_date = "1"
+gateway_date = "size=m"
+enable_double_check = true
