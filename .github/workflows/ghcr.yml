@@ -3,7 +3,7 @@ name: Build and Push Docker Image
 on:
   push:
     branches:
-      - master
+      - dev
 
 jobs:
   build:
@@ -47,7 +47,7 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ env.repo_name }}:latest
+            ghcr.io/${{ env.repo_name }}:dev
             ghcr.io/${{ env.repo_name }}:${{ env.date_tag }}
             ghcr.io/${{ env.repo_name }}:${{ env.git_sha }}
           cache-from: type=local,src=/tmp/.buildx-cache
