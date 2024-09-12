@@ -308,7 +308,7 @@ impl ExloliUploader {
     }
 
     async fn verify_image_accessibility(&self, url: &str) -> Result<()> {
-        self.ehentai.client.head(url).send().await?.error_for_status()?;
+        self.ehentai.get_client().head(url).send().await?.error_for_status()?;
         Ok(())
     }
 }
