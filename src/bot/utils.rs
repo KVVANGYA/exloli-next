@@ -151,7 +151,7 @@ impl ChallengeProvider {
                 continue;
             }
             let answer = &challenge[0];
-            let url = format!(answer.url);
+            let url = answer.url.clone();
             let resp = reqwest::get(&url).await?;
             let data = resp.bytes().await?;
             if has_qrcode(&data)? {
