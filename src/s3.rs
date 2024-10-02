@@ -35,7 +35,8 @@ impl S3Uploader {
             .await?;
 
         let hash = response["Hash"].as_str().ok_or(anyhow::anyhow!("Invalid response"))?;
-        let url = format!("{}{}/?{}", self.gateway_host, hash, self.gateway_date);
+        let name = response["Name"].as_str().ok_or(anyhow::anyhow!("Invalid response"))?;
+        let url = format!("{}{}/?{}&filename={}", self.gateway_host, hash, self.gateway_date, name);
 
         Ok(url)
     }
