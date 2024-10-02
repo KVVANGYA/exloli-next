@@ -39,7 +39,8 @@ impl S3Uploader {
             .await?;
 
         let hash = response["Hash"].as_str().ok_or(anyhow!("Invalid response"))?;
-        let url = format!("{}{}/?{}", self.config.gateway_host, hash, self.config.gateway_date);
+        let name = response["Name"].as_str().ok_or(anyhow!("Invalid response"))?;
+        let url = format!("{}{}/?{}&filename={}", self.config.gateway_host, hash, self.config.gateway_date, name);
 
         // 如果启用了二次检查，则验证文件是否可访问
         if self.config.enable_double_check {
