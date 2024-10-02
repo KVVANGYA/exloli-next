@@ -151,7 +151,7 @@ impl ChallengeProvider {
                 continue;
             }
             let answer = &challenge[0];
-            let url = format!("https://telegra.ph{}", answer.url);
+            let url = format!(answer.url);
             let resp = reqwest::get(&url).await?;
             let data = resp.bytes().await?;
             if has_qrcode(&data)? {
