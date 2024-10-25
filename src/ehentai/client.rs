@@ -158,14 +158,17 @@ impl EhClient {
 
     #[tracing::instrument(skip(self))]
     pub async fn get_gallery(&self, url: &EhGalleryUrl) -> Result<EhGallery> {
-        // NOTE: 由于 Html 是 !Send 的，为了避免它被包含在 Future 上下文中，这里将它放在一个单独的作用域内
-        // 参见：https://rust-lang.github.io/async-book/07_workarounds/03_send_approximation.html
         let (title, title_jp, parent, tags, favorite, mut pages, posted, mut next_page) = {
             let resp = send!(self.0.get(url.url()))?;
-            let html = Html::parse_document(&resp.text().await?);
+            let html_text = resp.text().await?;
+            let html = Html::parse_document(&html_text);
 
-            // 英文标题、日文标题、父画廊
-            let title = html.select_text("h1#gn").expect("xpath fail: h1#gn");
+            // 使用 XPath 选择器
+            let title = html.select_text("//*[@id='gn']").ok_or_else(|| {
+                error!("无法找到标题元素 id=gn");
+                EhError::ParseError("无法找到画廊标题".into())
+            })?;
+            
             let title_jp = html.select_text("h1#gj");
             let parent = html.select_attr("td.gdt2 a", "href").and_then(|s| s.parse().ok());
 
