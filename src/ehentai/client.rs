@@ -43,7 +43,8 @@ impl EhClient {
     #[tracing::instrument(skip(cookie))]
     pub async fn new(cookie: &str) -> Result<Self> {
         info!("登陆 E 站中");
-        info!("cookie: {}", cookie);
+        // 将 cookie 日志级别改为 debug，避免在生产环境泄露敏感信息
+        debug!("cookie: {}", cookie);
         let headers = headers! {
             ACCEPT => "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             ACCEPT_ENCODING => "gzip, deflate, br", 
