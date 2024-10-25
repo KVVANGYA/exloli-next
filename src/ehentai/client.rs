@@ -160,15 +160,15 @@ impl EhClient {
 
     #[tracing::instrument(skip(self))]
     pub async fn get_gallery(&self, url: &EhGalleryUrl) -> Result<EhGallery> {
-        // 获取响应和HTML内容
-        let resp = send!(self.0.get(url.url()))?;
-        let html_text = resp.text().await?;
-        let html = Html::parse_document(&html_text);
+        // NOTE: 由于 Html 是 !Send 的，为了避免它被包含在 Future 上下文中，这里将它放在一个单独的作用域内
+        // 参见：https://rust-lang.github.io/async-book/07_workarounds/03_send_approximation.html
+        let (title, title_jp, parent, tags, favorite, mut pages, posted, mut next_page) = {
+            let resp = send!(self.0.get(url.url()))?;
+            let html = Html::parse_document(&resp.text().await?);
+            debug!("html: {}", html);
 
-        // 使用 Result 来处理可能的错误
-        let result = (|| {
-            let title = html.select_text("h1#gn")
-                .ok_or_else(|| error!("无法找到标题 (h1#gn) \n{}", html_text))?;
+            // 英文标题、日文标题、父画廊
+            let title = html.select_text("h1#gn").expect("xpath fail: h1#gn");
             let title_jp = html.select_text("h1#gj");
             let parent = html.select_attr("td.gdt2 a", "href").and_then(|s| s.parse().ok());
 
@@ -200,42 +200,32 @@ impl EhClient {
             let next_page = html.select_attr("table.ptt td:last-child a", "href");
 
             (title, title_jp, parent, tags, favorite, pages, posted, next_page)
-        })();
+        };
 
-        // 如果解析失败，输出HTML内容并返回错误
-        match result {
-            Ok((title, title_jp, parent, tags, favorite, mut pages, posted, mut next_page)) => {
-                while let Some(next_page_url) = &next_page {
-                    debug!(next_page_url);
-                    let resp = send!(self.0.get(next_page_url))?;
-                    let html = Html::parse_document(&resp.text().await?);
-                    pages.extend(html.select_attrs("div.gdtl a", "href"));
-                    next_page = html.select_attr("table.ptt td:last-child a", "href");
-                }
-
-                let pages = pages.into_iter().map(|s| s.parse()).collect::<Result<Vec<_>>>()?;
-                info!("图片数量：{}", pages.len());
-
-                let cover = url.cover();
-
-                Ok(EhGallery {
-                    url: url.clone(),
-                    title,
-                    title_jp,
-                    parent,
-                    tags,
-                    favorite,
-                    pages,
-                    posted,
-                    cover,
-                })
-            }
-            Err(e) => {
-                error!("解析画廊页面失败: {}", e);
-                error!("页面内容:\n{}", html_text);
-                Err(e)
-            }
+        while let Some(next_page_url) = &next_page {
+            debug!(next_page_url);
+            let resp = send!(self.0.get(next_page_url))?;
+            let html = Html::parse_document(&resp.text().await?);
+            pages.extend(html.select_attrs("div.gdtl a", "href"));
+            next_page = html.select_attr("table.ptt td:last-child a", "href");
         }
+
+        let pages = pages.into_iter().map(|s| s.parse()).collect::<Result<Vec<_>>>()?;
+        info!("图片数量：{}", pages.len());
+
+        let cover = url.cover();
+
+        Ok(EhGallery {
+            url: url.clone(),
+            title,
+            title_jp,
+            parent,
+            tags,
+            favorite,
+            pages,
+            posted,
+            cover,
+        })
     }
 
     /// 获取画廊的某一页的图片的 fileindex 和实际地址
