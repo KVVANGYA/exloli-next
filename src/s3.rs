@@ -14,6 +14,21 @@ impl S3Uploader {
         Ok(Self { client, gateway_host, gateway_date })
     }
 
+    // 添加新的批量上传方法
+    pub async fn upload_multiple<R: AsyncReadExt + Unpin>(
+        &self,
+        uploads: Vec<(&str, &mut R)>,
+    ) -> Result<Vec<String>> {
+        let mut urls = Vec::new();
+        
+        for (name, reader) in uploads {
+            let url = self.upload(name, reader).await?;
+            urls.push(url);
+        }
+        
+        Ok(urls)
+    }
+
     pub async fn upload<R: AsyncReadExt + Unpin>(
         &self,
         name: &str,

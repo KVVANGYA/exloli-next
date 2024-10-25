@@ -132,10 +132,16 @@ impl ChallengeProvider {
             loop {
                 match Self::_get_challenge().await {
                     Ok(challenge) => {
-                        tx.send(challenge).await.unwrap();
+                        // 处理发送错误,如果接收端关闭则退出循环
+                        if tx.send(challenge).await.is_err() {
+                            warn!("Challenge receiver has been dropped, stopping provider");
+                            break;
+                        }
                     }
                     Err(e) => {
                         warn!("获取挑战失败: {}", e);
+                        // 添加短暂延迟避免快速重试
+                        sleep(Duration::from_secs(1)).await;
                     }
                 }
             }
