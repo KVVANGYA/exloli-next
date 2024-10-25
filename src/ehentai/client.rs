@@ -166,7 +166,7 @@ impl EhClient {
             // 使用 XPath 选择器
             let title = html.select_text("//*[@id='gn']").ok_or_else(|| {
                 error!("无法找到标题元素 id=gn");
-                EhError::ParseError("无法找到画廊标题".into())
+                error!("无法找到画廊标题".into());
             })?;
             
             let title_jp = html.select_text("h1#gj");
