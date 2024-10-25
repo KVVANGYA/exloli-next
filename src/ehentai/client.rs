@@ -168,7 +168,7 @@ impl EhClient {
         // 使用 Result 来处理可能的错误
         let result = (|| {
             let title = html.select_text("h1#gn")
-                .ok_or_else(|| Error::Parse("无法找到标题 (h1#gn)".into()))?;
+                .ok_or_else(|| error!("无法找到标题 (h1#gn) \n{}", html_text))?;
             let title_jp = html.select_text("h1#gj");
             let parent = html.select_attr("td.gdt2 a", "href").and_then(|s| s.parse().ok());
 
