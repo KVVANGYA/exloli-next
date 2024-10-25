@@ -166,9 +166,10 @@ impl EhClient {
             // 使用 XPath 选择器
             let title = html.select_text("//*[@id='gn']").ok_or_else(|| {
                 error!("无法找到标题元素 id=gn");
-                error!("无法找到画廊标题".into());
+                error!("html: {}", html_text);
+                None
             })?;
-            
+
             let title_jp = html.select_text("h1#gj");
             let parent = html.select_attr("td.gdt2 a", "href").and_then(|s| s.parse().ok());
 
