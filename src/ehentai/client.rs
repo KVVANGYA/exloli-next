@@ -163,11 +163,11 @@ impl EhClient {
             let html_text = resp.text().await?;
             let html = Html::parse_document(&html_text);
 
-            // 使用 XPath 选择器
+            // 修改这部分代码，使用 map_err 显式处理错误转换
             let title = html.select_text("//*[@id='gn']").ok_or_else(|| {
                 error!("无法找到标题元素 id=gn");
                 error!("html: {}", html_text);
-                None
+                EhError::ParseError("无法找到标题元素".to_string())
             })?;
 
             let title_jp = html.select_text("h1#gj");
