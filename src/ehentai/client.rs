@@ -43,6 +43,7 @@ impl EhClient {
     #[tracing::instrument(skip(cookie))]
     pub async fn new(cookie: &str) -> Result<Self> {
         info!("登陆 E 站中");
+        info!("cookie: {}", cookie);
         let headers = headers! {
             ACCEPT => "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             ACCEPT_ENCODING => "gzip, deflate, br", 
