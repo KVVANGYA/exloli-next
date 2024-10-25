@@ -44,15 +44,15 @@ impl EhClient {
     pub async fn new(cookie: &str) -> Result<Self> {
         info!("登陆 E 站中");
         let headers = headers! {
-            ACCEPT => "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            ACCEPT_ENCODING => "gzip, deflate, br",
-            ACCEPT_LANGUAGE => "zh-CN,en-US;q=0.7,en;q=0.3",
+            ACCEPT => "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            ACCEPT_ENCODING => "gzip, deflate, br", 
+            ACCEPT_LANGUAGE => "zh-CN,zh;q=0.9,en;q=0.8",
             CACHE_CONTROL => "max-age=0",
             CONNECTION => "keep-alive",
             HOST => "exhentai.org",
             REFERER => "https://exhentai.org",
             UPGRADE_INSECURE_REQUESTS => "1",
-            USER_AGENT => "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:67.0) Gecko/20100101 Firefox/67.0",
+            USER_AGENT => "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             COOKIE => cookie
         };
 
