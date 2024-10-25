@@ -68,6 +68,7 @@ impl EhClient {
         // 获取必要的 cookie
         let _response = send!(client.get("https://exhentai.org/uconfig.php"))?;
         let _response = send!(client.get("https://exhentai.org/mytags"))?;
+        debug!("mytags: {}", _response.text().await?);
 
         Ok(Self(client))
     }
