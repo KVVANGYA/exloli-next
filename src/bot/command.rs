@@ -8,8 +8,6 @@ use crate::ehentai::EhGalleryUrl;
 pub enum AdminCommand {
     #[command(description = "根据 E 站 URL 上传一个指定画廊，如果已存在，则重新上传")]
     Upload(EhGalleryUrl),
-    #[command(description = "批量上传多个画廊")]
-    BatchUpload(Vec<EhGalleryUrl>),
     #[command(description = "删除所回复的画廊")]
     Delete,
     #[command(description = "完全删除所回复的画廊，会导致重新上传")]
