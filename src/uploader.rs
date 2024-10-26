@@ -353,4 +353,38 @@ impl ExloliUploader {
         }
         Ok(())
     }
+
+    /// 批量上传多个画廊链接
+    pub async fn batch_upload(&self, urls: Vec<String>) -> Result<()> {
+        let mut handles = Vec::new();
+        
+        // 将每个URL的处理放入单独的任务中
+        for url in urls {
+            let uploader = self.clone();
+            let handle = tokio::spawn(async move {
+                let gallery = EhGalleryUrl::parse(&url)?;
+                info!("尝试上传画廊：{}", url);
+                match uploader.try_upload(&gallery, true).await {
+                    Ok(_) => info!("成功上传画廊：{}", url),
+                    Err(err) => error!("上传失败：{}", err),
+                }
+                Result::<()>::Ok(())
+            });
+            handles.push(handle);
+            
+            // 每启动3个任务后等待一段时间，避免同时发起太多请求
+            if handles.len() % 3 == 0 {
+                time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+
+        // 等待所有任务完成
+        for handle in handles {
+            if let Err(err) = handle.await? {
+                error!("任务执行失败：{}", err);
+            }
+        }
+        
+        Ok(())
+    }
 }
