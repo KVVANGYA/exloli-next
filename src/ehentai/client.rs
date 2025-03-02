@@ -1,6 +1,3 @@
-use std::fmt::Debug;
-use std::time::Duration;
-
 use chrono::prelude::*;
 use futures::prelude::*;
 use indexmap::IndexMap;
@@ -10,6 +7,8 @@ use reqwest::header::*;
 use reqwest::Client;
 use scraper::{Html, Selector};
 use serde::Serialize;
+use std::fmt::Debug;
+use std::time::Duration;
 use tracing::{debug, error, info, Instrument};
 
 use super::error::*;
@@ -97,7 +96,7 @@ impl EhClient {
         }
 
         let next = html
-            .select_attr("a#unext", "href")
+            .select_attr("a#dnext", "href")
             .and_then(|s| s.rsplit('=').next().map(|s| s.to_string()));
 
         Ok((ret, next))
@@ -194,10 +193,10 @@ impl EhClient {
             let posted = NaiveDateTime::parse_from_str(posted, "%Y-%m-%d %H:%M")?;
 
             // 每一页的 URL
-            let pages = html.select_attrs("#gdt a", "href");
+            let pages = html.select_attrs("div#gdt a", "href");
 
             // 下一页的 URL
-            let next_page = html.select_attr("table.ptt td:last-child a", "href");
+            let next_page = html.select_attr("table.ptb td:last-child a", "href");
 
             (title, title_jp, parent, tags, favorite, pages, posted, next_page)
         };
@@ -206,8 +205,10 @@ impl EhClient {
             debug!(next_page_url);
             let resp = send!(self.0.get(next_page_url))?;
             let html = Html::parse_document(&resp.text().await?);
-            pages.extend(html.select_attrs("#gdt a", "href"));
-            next_page = html.select_attr("table.ptt td:last-child a", "href");
+            // 每一页的 URL
+            pages.extend(html.select_attrs("div#gdt a", "href"));
+            // 下一页的 URL
+            next_page = html.select_attr("table.ptb td:last-child a", "href");
         }
 
         let pages = pages.into_iter().map(|s| s.parse()).collect::<Result<Vec<_>>>()?;
@@ -228,28 +229,41 @@ impl EhClient {
         })
     }
 
-    /// 获取画廊的某一页的图片的 fileindex 和实际地址
+    /// 获取画廊的某一页的图片的 fileindex 和实际地址和 nl
     #[tracing::instrument(skip(self))]
     pub async fn get_image_url(&self, page: &EhPageUrl) -> Result<(u32, String)> {
-        let resp = send!(self.0.get(page.url()))?;
-        let html = Html::parse_document(&resp.text().await?);
-        let url = html.select_attr("img#img", "src").unwrap();
-        let fileindex = extract_fileindex(&url).unwrap();
-        Ok((fileindex, url))
-    }
+        let resp = send!(self.0.get(&page.url()))?;
+        let (url, nl, fileindex) = {
+            let html = Html::parse_document(&resp.text().await?);
+            let url = html.select_attr("img#img", "src").unwrap();
+            let nl = html.select_attr("img#img", "onerror").and_then(extract_nl);
+            let fileindex = extract_fileindex(&url).unwrap();
+            (url, nl, fileindex)
+        };
 
-    /// 获取画廊的某一页的图片的 fileindex 和字节流
-    #[tracing::instrument(skip(self))]
-    pub async fn get_image_bytes(&self, page: &EhPageUrl) -> Result<(u32, Vec<u8>)> {
-        let (fileindex, url) = self.get_image_url(page).await?;
-        let resp = send!(self.0.get(url))?;
-        Ok((fileindex, resp.bytes().await?.to_vec()))
+        return if send!(self.0.head(&url)).is_ok() {
+            Ok((fileindex, url))
+        } else if nl.is_some() {
+            let resp = send!(self.0.get(&page.with_nl(&nl.unwrap()).url()))?;
+            let html = Html::parse_document(&resp.text().await?);
+            let url = html.select_attr("img#img", "src").unwrap();
+            Ok((fileindex, url))
+        } else {
+            Err(EhError::HaHUrlBroken(url))
+        };
     }
 }
 
 fn extract_fileindex(url: &str) -> Option<u32> {
-    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"fileindex=(?P<fileindex>\d+)").unwrap());
-    let captures = RE.captures(url)?;
+    static RE1: Lazy<Regex> = Lazy::new(|| Regex::new(r"fileindex=(?P<fileindex>\d+)").unwrap());
+    static RE2: Lazy<Regex> = Lazy::new(|| Regex::new(r"/om/(?P<fileindex>\d+)/").unwrap());
+    let captures = RE1.captures(url).or_else(|| RE2.captures(url))?;
     let fileindex = captures.name("fileindex")?.as_str().parse().ok()?;
     Some(fileindex)
+}
+
+fn extract_nl(onerror: String) -> Option<String> {
+    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"nl\('(?P<nl>.+)'\)").unwrap());
+    let captures = RE.captures(&onerror)?;
+    Some(captures.name("nl")?.as_str().to_string())
 }
