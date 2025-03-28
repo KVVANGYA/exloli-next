@@ -1,6 +1,7 @@
 use anyhow::Result;
 use reqwest::Client;
 use tokio::io::AsyncReadExt;
+use tracing::{debug, error};
 
 pub struct S3Uploader {
     client: Client,
@@ -44,27 +45,41 @@ impl S3Uploader {
         let mut buffer = Vec::new();
         reader.read_to_end(&mut buffer).await?;
 
+        debug!("正在上传到teletype.in: 文件名: {}, 大小: {} 字节", name, buffer.len());
+
+        let part = reqwest::multipart::Part::bytes(buffer)
+            .file_name(name.to_string());
+
         let form = reqwest::multipart::Form::new()
             .text("type", "images")
-            .part("file", reqwest::multipart::Part::bytes(buffer).file_name(name.to_string()));
+            .part("file", part);
 
         let response = self
             .client
             .put("https://teletype.in/media/")
-            .header("Authorization", token)
+            .header("Authorization", token.clone())
             .multipart(form)
             .send()
             .await?;
             
         if !response.status().is_success() {
-            return Err(anyhow::anyhow!("Failed to upload to teletype.in: {}", response.status()));
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_else(|_| "无法获取错误详情".to_string());
+            error!("Teletype上传失败: 状态码: {}, 错误信息: {}", status, error_text);
+            
+            if status.as_u16() == 401 || status.as_u16() == 403 {
+                return Err(anyhow::anyhow!("Teletype授权失败，请检查令牌: {} - {}", status, error_text));
+            }
+            return Err(anyhow::anyhow!("上传到teletype.in失败: {} - {}", status, error_text));
         }
         
         let response_text = response.text().await?;
+        debug!("Teletype上传成功: 响应: {}", response_text);
+        
         let url = response_text.trim().to_string();
         
-        if url.is_empty() {
-            return Err(anyhow::anyhow!("Empty response URL from teletype.in"));
+        if url.is_empty() || !url.starts_with("http") {
+            return Err(anyhow::anyhow!("无效的响应URL: {}", response_text));
         }
         
         Ok(url)
