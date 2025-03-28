@@ -67,7 +67,7 @@ impl S3Uploader {
 
         let response = self
             .client
-            .put("https://teletype.in/media")
+            .put("https://teletype.in/media/")
             .header("Authorization", token.clone())
             .multipart(form)
             .send()
