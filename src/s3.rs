@@ -67,7 +67,7 @@ impl S3Uploader {
 
         let response = self
             .client
-            .put("https://teletype.in/media/")
+            .put("https://teletype.in/media/") // 一定要添加尾部斜杠
             .header("Authorization", token.clone())
             .multipart(form)
             .send()
@@ -87,10 +87,32 @@ impl S3Uploader {
         let response_text = response.text().await?;
         debug!("Teletype上传成功: 响应: {}", response_text);
         
-        let url = response_text.trim().to_string();
+        // 解析JSON响应
+        let url = match serde_json::from_str::<serde_json::Value>(&response_text) {
+            Ok(json) => {
+                // 从JSON中获取url字段
+                if let Some(url) = json["url"].as_str() {
+                    url.to_string()
+                } else {
+                    return Err(anyhow::anyhow!("无法从JSON响应中提取URL字段: {}", response_text));
+                }
+            },
+            Err(e) => {
+                // 如果不是有效的JSON，尝试直接使用响应文本作为URL
+                debug!("无法解析JSON响应，尝试直接使用响应文本: {}", e);
+                let url_text = response_text.trim();
+                if url_text.starts_with("http") {
+                    url_text.to_string()
+                } else {
+                    return Err(anyhow::anyhow!("无效的响应内容，既不是URL也不是有效JSON: {}", response_text));
+                }
+            }
+        };
+        
+        debug!("提取的URL: {}", url);
         
         if url.is_empty() || !url.starts_with("http") {
-            return Err(anyhow::anyhow!("无效的响应URL: {}", response_text));
+            return Err(anyhow::anyhow!("提取的URL无效: {}", url));
         }
         
         Ok(url)
