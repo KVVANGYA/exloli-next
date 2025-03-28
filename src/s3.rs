@@ -7,13 +7,13 @@ pub struct S3Uploader {
     client: Client,
     gateway_host: String,
     gateway_date: String,
-    auth_token: Option<String>,
+    teletype_token: Option<String>,
 }
 
 impl S3Uploader {
     pub fn new(gateway_host: String, gateway_date: String, teletype_token: Option<String>) -> Result<Self> {
         let client = Client::new();
-        Ok(Self { client, gateway_host, gateway_date, auth_token: teletype_token })
+        Ok(Self { client, gateway_host, gateway_date, teletype_token })
     }
 
     pub async fn upload_multiple<R: AsyncReadExt + Unpin>(
@@ -23,7 +23,7 @@ impl S3Uploader {
         let mut urls = Vec::new();
         
         for (name, reader) in uploads {
-            let url = if self.auth_token.is_some() {
+            let url = if self.teletype_token.is_some() {
                 self.upload_to_teletype(name, reader).await
             } else {
                 self.upload(name, reader).await
@@ -40,7 +40,7 @@ impl S3Uploader {
         name: &str,
         reader: &mut R,
     ) -> Result<String> {
-        let token = self.auth_token.as_ref().ok_or(anyhow::anyhow!("Authorization token is required"))?;
+        let token = self.teletype_token.as_ref().ok_or(anyhow::anyhow!("Authorization token is required"))?;
         
         let mut buffer = Vec::new();
         reader.read_to_end(&mut buffer).await?;
@@ -90,7 +90,7 @@ impl S3Uploader {
         name: &str,
         reader: &mut R,
     ) -> Result<String> {
-        if self.auth_token.is_some() {
+        if self.teletype_token.is_some() {
             return self.upload_to_teletype(name, reader).await;
         }
         
