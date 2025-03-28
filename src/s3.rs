@@ -45,18 +45,29 @@ impl S3Uploader {
         let mut buffer = Vec::new();
         reader.read_to_end(&mut buffer).await?;
 
-        debug!("正在上传到teletype.in: 文件名: {}, 大小: {} 字节", name, buffer.len());
+        debug!("正在上传到teletype.in: 文件名: {}, 大小: {} 字节, Authorization: {}, Authorization.Clone: {}", name, buffer.len(), token, token.clone());
+
+        let file_extension = name.split('.').last().unwrap_or("jpg");
+        let content_type = match file_extension.to_lowercase().as_str() {
+            "jpg" | "jpeg" => "image/jpeg",
+            "png" => "image/png",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            "bmp" => "image/bmp",
+            _ => "image/jpeg",
+        };
 
         let part = reqwest::multipart::Part::bytes(buffer)
-            .file_name(name.to_string());
+            .file_name(name.to_string())
+            .mime_str(content_type)?;
 
         let form = reqwest::multipart::Form::new()
-            .text("type", "images")
-            .part("file", part);
+            .part("file", part)
+            .text("type", "images");
 
         let response = self
             .client
-            .put("https://teletype.in/media/")
+            .put("https://teletype.in/media")
             .header("Authorization", token.clone())
             .multipart(form)
             .send()
@@ -82,6 +93,28 @@ impl S3Uploader {
             return Err(anyhow::anyhow!("无效的响应URL: {}", response_text));
         }
         
+        Ok(url)
+    }
+
+    async fn upload_fallback(&self, name: &str, buffer: &[u8]) -> Result<String> {
+        debug!("使用备用方式上传: {}", name);
+        
+        let form = reqwest::multipart::Form::new()
+            .part("file", reqwest::multipart::Part::bytes(buffer.to_vec()).file_name(name.to_string()));
+
+        let response = self
+            .client
+            .post("https://api.img2ipfs.org/api/v0/add?pin=false")
+            .multipart(form)
+            .send()
+            .await?
+            .json::<serde_json::Value>()
+            .await?;
+
+        let hash = response["Hash"].as_str().ok_or(anyhow::anyhow!("Invalid response"))?;
+        let name = response["Name"].as_str().ok_or(anyhow::anyhow!("Invalid response"))?;
+        let url = format!("{}{}/?{}&filename={}", self.gateway_host, hash, self.gateway_date, name);
+
         Ok(url)
     }
 
