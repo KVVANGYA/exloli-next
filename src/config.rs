@@ -82,6 +82,8 @@ pub struct S3 {
 pub struct Ipfs {
     pub gateway_host: String,
     pub gateway_date: String,
+    /// teletype.in 授权令牌
+    pub teletype_token: Option<String>,
 }
 
 impl Config {

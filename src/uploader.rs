@@ -221,6 +221,7 @@ impl ExloliUploader {
         let s3 = S3Uploader::new(
             self.config.ipfs.gateway_host.clone(),
             self.config.ipfs.gateway_date.clone(),
+            self.config.ipfs.teletype_token.clone(),
         )?;
         let client = Client::builder()
             .timeout(Duration::from_secs(30))

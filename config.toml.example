@@ -62,3 +62,5 @@ host = "example.com"
 [ipfs]
 gateway_host = "https://ipfs.io/ipfs/"
 gateway_date = "1"
+# teletype.in 授权令牌 (可选)
+# teletype_token = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
