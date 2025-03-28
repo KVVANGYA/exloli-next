@@ -24,7 +24,15 @@ impl S3Uploader {
         
         for (name, reader) in uploads {
             let url = if self.teletype_token.is_some() {
-                self.upload_to_teletype(name, reader).await
+                match self.upload_to_teletype(name, reader).await {
+                    Ok(url) => Ok(url),
+                    Err(e) => {
+                        debug!("Teletype上传失败，尝试备用上传方式: {}", e);
+                        let mut buffer = Vec::new();
+                        reader.read_to_end(&mut buffer).await?;
+                        self.upload_fallback(name, &buffer).await
+                    }
+                }
             } else {
                 self.upload(name, reader).await
             };
@@ -146,7 +154,13 @@ impl S3Uploader {
         reader: &mut R,
     ) -> Result<String> {
         if self.teletype_token.is_some() {
-            return self.upload_to_teletype(name, reader).await;
+            match self.upload_to_teletype(name, reader).await {
+                Ok(url) => return Ok(url),
+                Err(e) => {
+                    debug!("Teletype上传失败，尝试备用上传方式: {}", e);
+                    // 错误时继续执行下面的备用上传代码
+                }
+            }
         }
         
         let mut buffer = Vec::new();
