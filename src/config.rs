@@ -8,6 +8,10 @@ use teloxide::types::{ChatId, Recipient};
 
 pub static CHANNEL_ID: OnceCell<String> = OnceCell::new();
 
+fn default_allow_public_commands() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     /// 日志等级
@@ -60,6 +64,9 @@ pub struct Telegram {
     pub group_id: ChatId,
     /// 入口讨论组 ID
     pub auth_group_id: ChatId,
+    /// 是否允许非管理员使用公共命令
+    #[serde(default = "default_allow_public_commands")]
+    pub allow_public_commands: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

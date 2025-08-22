@@ -10,6 +10,7 @@ use teloxide::utils::html::escape;
 use tracing::info;
 
 use crate::bot::command::{AdminCommand, PublicCommand};
+use crate::bot::filter::filter_admin_msg;
 use crate::bot::handlers::{
     cmd_best_keyboard, cmd_best_text, cmd_challenge_keyboard, gallery_preview_url,
 };
@@ -24,16 +25,22 @@ use crate::uploader::ExloliUploader;
 use crate::{reply_to, try_with_reply};
 
 pub fn public_command_handler(
-    _config: Config,
+    config: Config,
 ) -> Handler<'static, DependencyMap, Result<()>, DpHandlerDescription> {
-    teloxide::filter_command::<PublicCommand, _>()
+    let handler = teloxide::filter_command::<PublicCommand, _>()
         .branch(case![PublicCommand::Query(gallery)].endpoint(cmd_query))
         .branch(case![PublicCommand::Ping].endpoint(cmd_ping))
         .branch(case![PublicCommand::Update(url)].endpoint(cmd_update))
         .branch(case![PublicCommand::Best(from, to)].endpoint(cmd_best))
         .branch(case![PublicCommand::Challenge].endpoint(cmd_challenge))
         .branch(case![PublicCommand::Upload(gallery)].endpoint(cmd_upload))
-        .branch(case![PublicCommand::Help].endpoint(cmd_help))
+        .branch(case![PublicCommand::Help].endpoint(cmd_help));
+    
+    if config.telegram.allow_public_commands {
+        handler
+    } else {
+        filter_admin_msg().chain(handler)
+    }
 }
 
 async fn cmd_help(bot: Bot, msg: Message) -> Result<()> {
