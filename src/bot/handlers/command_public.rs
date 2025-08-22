@@ -27,19 +27,25 @@ use crate::{reply_to, try_with_reply};
 pub fn public_command_handler(
     config: Config,
 ) -> Handler<'static, DependencyMap, Result<()>, DpHandlerDescription> {
-    let handler = teloxide::filter_command::<PublicCommand, _>()
-        .branch(case![PublicCommand::Query(gallery)].endpoint(cmd_query))
-        .branch(case![PublicCommand::Ping].endpoint(cmd_ping))
-        .branch(case![PublicCommand::Update(url)].endpoint(cmd_update))
-        .branch(case![PublicCommand::Best(from, to)].endpoint(cmd_best))
-        .branch(case![PublicCommand::Challenge].endpoint(cmd_challenge))
-        .branch(case![PublicCommand::Upload(galleries)].endpoint(cmd_upload))
-        .branch(case![PublicCommand::Help].endpoint(cmd_help));
-    
     if config.telegram.allow_public_commands {
-        handler
+        teloxide::filter_command::<PublicCommand, _>()
+            .branch(case![PublicCommand::Query(gallery)].endpoint(cmd_query))
+            .branch(case![PublicCommand::Ping].endpoint(cmd_ping))
+            .branch(case![PublicCommand::Update(url)].endpoint(cmd_update))
+            .branch(case![PublicCommand::Best(from, to)].endpoint(cmd_best))
+            .branch(case![PublicCommand::Challenge].endpoint(cmd_challenge))
+            .branch(case![PublicCommand::Upload(galleries)].endpoint(cmd_upload))
+            .branch(case![PublicCommand::Help].endpoint(cmd_help))
     } else {
-        filter_admin_msg().chain(handler)
+        teloxide::filter_command::<PublicCommand, _>()
+            .chain(filter_admin_msg())
+            .branch(case![PublicCommand::Query(gallery)].endpoint(cmd_query))
+            .branch(case![PublicCommand::Ping].endpoint(cmd_ping))
+            .branch(case![PublicCommand::Update(url)].endpoint(cmd_update))
+            .branch(case![PublicCommand::Best(from, to)].endpoint(cmd_best))
+            .branch(case![PublicCommand::Challenge].endpoint(cmd_challenge))
+            .branch(case![PublicCommand::Upload(galleries)].endpoint(cmd_upload))
+            .branch(case![PublicCommand::Help].endpoint(cmd_help))
     }
 }
 
