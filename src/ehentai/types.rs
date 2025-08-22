@@ -247,6 +247,21 @@ mod tests {
     }
 
     #[test]
+    fn test_actual_urls() {
+        let url1 = "https://e-hentai.org/g/2988976/d7f6178199/";
+        let url2 = "https://e-hentai.org/g/2989007/ff760f6775/";
+        
+        let parsed1 = url1.parse::<EhGalleryUrl>();
+        let parsed2 = url2.parse::<EhGalleryUrl>();
+        
+        println!("URL1 parse result: {:?}", parsed1);
+        println!("URL2 parse result: {:?}", parsed2);
+        
+        assert!(parsed1.is_ok());
+        assert!(parsed2.is_ok());
+    }
+
+    #[test]
     fn parse_page_url() {
         let s = "https://exhentai.org/s/03af734602/1932743-1";
         let url = s.parse::<EhPageUrl>().unwrap();
