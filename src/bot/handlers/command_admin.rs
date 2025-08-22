@@ -17,7 +17,7 @@ pub fn admin_command_handler() -> Handler<'static, DependencyMap, Result<()>, Dp
 {
     teloxide::filter_command::<AdminCommand, _>()
         .chain(filter_admin_msg())
-        .branch(case![AdminCommand::Upload(gallery)].endpoint(cmd_upload))
+        .branch(case![AdminCommand::Upload(galleries)].endpoint(cmd_upload))
         .branch(case![AdminCommand::Delete].endpoint(cmd_delete))
         .branch(case![AdminCommand::Erase].endpoint(cmd_delete))
         .branch(case![AdminCommand::ReCheck].endpoint(cmd_recheck))
@@ -41,10 +41,27 @@ async fn cmd_upload(
     bot: Bot,
     msg: Message,
     uploader: ExloliUploader,
-    gallery: EhGalleryUrl,
+    galleries: Vec<EhGalleryUrl>,
 ) -> Result<()> {
-    info!("{}: /upload {}", msg.from().unwrap().id, gallery);
-    try_with_reply!(bot, msg, uploader.try_upload(&gallery, false).await);
+    let user_id = msg.from().unwrap().id;
+    info!("{}: /upload {} galleries", user_id, galleries.len());
+    
+    if galleries.is_empty() {
+        reply_to!(bot, msg, "请提供至少一个画廊链接").await?;
+        return Ok(());
+    }
+    
+    let mut results = Vec::new();
+    
+    for gallery in galleries {
+        match uploader.try_upload(&gallery, false).await {
+            Ok(_) => results.push(format!("{}: 上传成功", gallery.id())),
+            Err(e) => results.push(format!("{}: 上传失败 - {}", gallery.id(), e)),
+        }
+    }
+    
+    let response = results.join("\n");
+    reply_to!(bot, msg, response).await?;
     Ok(())
 }
 

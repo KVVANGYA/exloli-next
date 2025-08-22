@@ -6,8 +6,8 @@ use crate::ehentai::EhGalleryUrl;
 #[derive(BotCommands, Clone, PartialEq, Debug)]
 #[command(rename_rule = "lowercase")]
 pub enum AdminCommand {
-    #[command(description = "根据 E 站 URL 上传一个指定画廊，如果已存在，则重新上传")]
-    Upload(EhGalleryUrl),
+    #[command(description = "根据 E 站 URL 上传指定画廊，如果已存在，则重新上传", parse_with = "split")]
+    Upload(Vec<EhGalleryUrl>),
     #[command(description = "删除所回复的画廊")]
     Delete,
     #[command(description = "完全删除所回复的画廊，会导致重新上传")]
@@ -22,8 +22,8 @@ pub enum AdminCommand {
 #[derive(BotCommands, Clone, PartialEq, Debug)]
 #[command(rename_rule = "lowercase")]
 pub enum PublicCommand {
-    #[command(description = "根据 E 站 URL 上传一个曾经上传过的画廊")]
-    Upload(EhGalleryUrl),
+    #[command(description = "根据 E 站 URL 上传曾经上传过的画廊", parse_with = "split")]
+    Upload(Vec<EhGalleryUrl>),
     #[command(description = "根据消息 URL 更新一个指定画廊")]
     Update(String),
     #[command(description = "根据 E 站 URL 查询一个指定画廊")]

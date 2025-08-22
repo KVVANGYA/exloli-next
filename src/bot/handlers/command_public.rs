@@ -33,7 +33,7 @@ pub fn public_command_handler(
         .branch(case![PublicCommand::Update(url)].endpoint(cmd_update))
         .branch(case![PublicCommand::Best(from, to)].endpoint(cmd_best))
         .branch(case![PublicCommand::Challenge].endpoint(cmd_challenge))
-        .branch(case![PublicCommand::Upload(gallery)].endpoint(cmd_upload))
+        .branch(case![PublicCommand::Upload(galleries)].endpoint(cmd_upload))
         .branch(case![PublicCommand::Help].endpoint(cmd_help));
     
     if config.telegram.allow_public_commands {
@@ -56,14 +56,31 @@ async fn cmd_upload(
     bot: Bot,
     msg: Message,
     uploader: ExloliUploader,
-    gallery: EhGalleryUrl,
+    galleries: Vec<EhGalleryUrl>,
 ) -> Result<()> {
-    info!("{}: /upload {}", msg.from().unwrap().id, gallery);
-    if GalleryEntity::get(gallery.id()).await?.is_none() {
-        reply_to!(bot, msg, "非管理员只能上传存在上传记录的画廊").await?;
-    } else {
-        try_with_reply!(bot, msg, uploader.try_upload(&gallery, true).await);
+    let user_id = msg.from().unwrap().id;
+    info!("{}: /upload {} galleries", user_id, galleries.len());
+    
+    if galleries.is_empty() {
+        reply_to!(bot, msg, "请提供至少一个画廊链接").await?;
+        return Ok(());
     }
+    
+    let mut results = Vec::new();
+    
+    for gallery in galleries {
+        if GalleryEntity::get(gallery.id()).await?.is_none() {
+            results.push(format!("{}: 非管理员只能上传存在上传记录的画廊", gallery.id()));
+        } else {
+            match uploader.try_upload(&gallery, true).await {
+                Ok(_) => results.push(format!("{}: 上传成功", gallery.id())),
+                Err(e) => results.push(format!("{}: 上传失败 - {}", gallery.id(), e)),
+            }
+        }
+    }
+    
+    let response = results.join("\n");
+    reply_to!(bot, msg, response).await?;
     Ok(())
 }
 
