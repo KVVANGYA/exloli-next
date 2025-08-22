@@ -34,7 +34,7 @@ pub fn public_command_handler(
             .branch(case![PublicCommand::Update(url)].endpoint(cmd_update))
             .branch(case![PublicCommand::Best(from, to)].endpoint(cmd_best))
             .branch(case![PublicCommand::Challenge].endpoint(cmd_challenge))
-            .branch(case![PublicCommand::Upload(galleries)].endpoint(cmd_upload))
+            .branch(case![PublicCommand::Upload(urls)].endpoint(cmd_upload))
             .branch(case![PublicCommand::Help].endpoint(cmd_help))
     } else {
         teloxide::filter_command::<PublicCommand, _>()
@@ -44,7 +44,7 @@ pub fn public_command_handler(
             .branch(case![PublicCommand::Update(url)].endpoint(cmd_update))
             .branch(case![PublicCommand::Best(from, to)].endpoint(cmd_best))
             .branch(case![PublicCommand::Challenge].endpoint(cmd_challenge))
-            .branch(case![PublicCommand::Upload(galleries)].endpoint(cmd_upload))
+            .branch(case![PublicCommand::Upload(urls)].endpoint(cmd_upload))
             .branch(case![PublicCommand::Help].endpoint(cmd_help))
     }
 }
@@ -62,13 +62,29 @@ async fn cmd_upload(
     bot: Bot,
     msg: Message,
     uploader: ExloliUploader,
-    galleries: Vec<EhGalleryUrl>,
+    urls: String,
 ) -> Result<()> {
     let user_id = msg.from().unwrap().id;
-    info!("{}: /upload {} galleries", user_id, galleries.len());
+    info!("{}: /upload {}", user_id, urls);
+    
+    if urls.trim().is_empty() {
+        reply_to!(bot, msg, "请提供至少一个画廊链接").await?;
+        return Ok(());
+    }
+    
+    let galleries: Vec<EhGalleryUrl> = urls
+        .split_whitespace()
+        .filter_map(|url| match url.parse::<EhGalleryUrl>() {
+            Ok(gallery) => Some(gallery),
+            Err(e) => {
+                info!("Failed to parse URL {}: {}", url, e);
+                None
+            }
+        })
+        .collect();
     
     if galleries.is_empty() {
-        reply_to!(bot, msg, "请提供至少一个画廊链接").await?;
+        reply_to!(bot, msg, "未找到有效的画廊链接").await?;
         return Ok(());
     }
     
