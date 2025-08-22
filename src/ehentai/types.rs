@@ -44,7 +44,7 @@ impl FromStr for EhGalleryUrl {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         static RE: Lazy<Regex> = Lazy::new(|| {
-            Regex::new(r"https://e.hentai.org/g/(?P<id>\d+)/(?P<token>[^/]+)/?(?P<cover>#\d+)?")
+            Regex::new(r"https://(?:e-hentai|exhentai)\.org/g/(?P<id>\d+)/(?P<token>[^/]+)/?(?P<cover>#\d+)?")
                 .unwrap()
         });
         let captures = RE.captures(s).ok_or_else(|| EhError::InvalidURL(s.to_owned()))?;
@@ -116,7 +116,7 @@ impl FromStr for EhPageUrl {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         static RE: Lazy<Regex> = Lazy::new(|| {
-            Regex::new(r"https://e.hentai.org/s/(?P<hash>.+)/(?P<id>\d+)-(?P<page>\d+)").unwrap()
+            Regex::new(r"https://(?:e-hentai|exhentai)\.org/s/(?P<hash>.+)/(?P<id>\d+)-(?P<page>\d+)").unwrap()
         });
 
         let captures = RE.captures(s).ok_or_else(|| EhError::InvalidURL(s.to_owned()))?;
@@ -234,6 +234,16 @@ mod tests {
         assert_eq!(url.id, 2423705);
         assert_eq!(url.token, "3962191348");
         assert_eq!(url.url(), s);
+    }
+
+    #[test]
+    fn parse_e_hentai_url() {
+        let s = "https://e-hentai.org/g/2423705/3962191348/";
+        let url = s.parse::<EhGalleryUrl>().unwrap();
+        assert_eq!(url.id, 2423705);
+        assert_eq!(url.token, "3962191348");
+        // Should normalize to exhentai.org
+        assert_eq!(url.url(), "https://exhentai.org/g/2423705/3962191348/");
     }
 
     #[test]
