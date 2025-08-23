@@ -8,6 +8,9 @@ use teloxide::types::InputFile;
 use teloxide::utils::command::BotCommands;
 use teloxide::utils::html::escape;
 use tracing::info;
+use std::time::{Duration, Instant};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use crate::bot::command::{AdminCommand, PublicCommand};
 use crate::bot::filter::filter_admin_msg;
@@ -98,6 +101,9 @@ async fn cmd_upload(
     
     let mut results = Vec::new();
     
+    // 创建消息更新时间控制
+    let last_update_time = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(10)));
+    
     for (index, gallery) in galleries.iter().enumerate() {
         info!("Processing gallery ID: {}", gallery.id());
         
@@ -111,7 +117,7 @@ async fn cmd_upload(
             create_progress_bar_public(index, galleries.len(), &current_results)
         );
         
-        bot.edit_message_text(msg.chat.id, progress_msg.id, processing_text).await.ok();
+        edit_message_with_throttle(&bot, msg.chat.id, progress_msg.id, processing_text, last_update_time.clone()).await;
         
         // 检查权限
         if GalleryEntity::get(gallery.id()).await?.is_none() {
@@ -138,7 +144,7 @@ async fn cmd_upload(
             create_progress_bar_public(index + 1, galleries.len(), &results)
         );
         
-        bot.edit_message_text(msg.chat.id, progress_msg.id, progress_text).await.ok();
+        edit_message_with_throttle(&bot, msg.chat.id, progress_msg.id, progress_text, last_update_time.clone()).await;
     }
     
     // 最终结果
@@ -183,6 +189,27 @@ fn create_final_summary_public(results: &[(i32, bool, String)]) -> String {
     }
     
     text
+}
+
+// 带时间间隔控制的消息编辑函数
+async fn edit_message_with_throttle(
+    bot: &Bot,
+    chat_id: ChatId,
+    message_id: MessageId,
+    text: String,
+    last_update_time: Arc<Mutex<Instant>>
+) {
+    // 检查是否需要限制更新频率
+    {
+        let mut last_update = last_update_time.lock().await;
+        let now = Instant::now();
+        if now.duration_since(*last_update) < Duration::from_secs(5) {
+            return; // 跳过更新，避免频繁调用 API
+        }
+        *last_update = now;
+    }
+    
+    bot.edit_message_text(chat_id, message_id, text).await.ok();
 }
 
 async fn cmd_challenge(

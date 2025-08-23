@@ -6,6 +6,7 @@ use teloxide::types::MessageId;
 use tracing::info;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use crate::bot::command::AdminCommand;
 use crate::bot::filter::filter_admin_msg;
@@ -158,6 +159,9 @@ async fn cmd_upload_inner(
             status_message: "开始处理".to_string(),
         }));
         
+        // 创建消息更新时间控制
+        let last_update_time = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(10)));
+        
         let bot_clone = bot.clone();
         let msg_clone = msg.clone();
         let progress_msg_id = progress_msg.id;
@@ -166,13 +170,15 @@ async fn cmd_upload_inner(
         // 执行带进度跟踪的上传
         let galleries_clone = galleries.clone();
         let results_clone = results.clone();
+        let last_update_clone = last_update_time.clone();
         let callback = Arc::new(move |prog: GalleryProgress| {
             let bot = bot_clone.clone();
             let msg = msg_clone.clone();
             let galleries = galleries_clone.clone();
             let results = results_clone.clone();
+            let last_update = last_update_clone.clone();
             async move {
-                update_gallery_progress(&bot, msg.chat.id, progress_msg_id, index, &galleries, &results, &prog).await.ok();
+                update_gallery_progress_throttled(&bot, msg.chat.id, progress_msg_id, index, &galleries, &results, &prog, last_update).await.ok();
             }
         });
         
@@ -317,6 +323,30 @@ where
     }
 }
 
+
+// 带时间间隔控制的画廊进度更新函数
+async fn update_gallery_progress_throttled(
+    bot: &Bot,
+    chat_id: ChatId,
+    message_id: MessageId,
+    current_gallery_index: usize,
+    all_galleries: &[EhGalleryUrl],
+    completed_results: &[(i32, bool, String)],
+    current_progress: &GalleryProgress,
+    last_update_time: Arc<Mutex<Instant>>
+) -> Result<()> {
+    // 检查是否需要限制更新频率
+    {
+        let mut last_update = last_update_time.lock().await;
+        let now = Instant::now();
+        if now.duration_since(*last_update) < Duration::from_secs(5) {
+            return Ok(()); // 跳过更新，避免频繁调用 API
+        }
+        *last_update = now;
+    }
+    
+    update_gallery_progress(bot, chat_id, message_id, current_gallery_index, all_galleries, completed_results, current_progress).await
+}
 
 // 更新画廊进度显示
 async fn update_gallery_progress(
