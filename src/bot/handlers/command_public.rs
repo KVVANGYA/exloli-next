@@ -25,7 +25,7 @@ use crate::database::{GalleryEntity, MessageEntity, PollEntity};
 use crate::ehentai::{EhGalleryUrl, GalleryInfo};
 use crate::tags::EhTagTransDB;
 use crate::uploader::ExloliUploader;
-use crate::{reply_to, try_with_reply};
+use crate::reply_to;
 
 pub fn public_command_handler(
     config: Config,
