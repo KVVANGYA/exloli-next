@@ -8,12 +8,12 @@ use teloxide::types::{InputFile, MessageId};
 use teloxide::utils::command::BotCommands;
 use teloxide::utils::html::escape;
 use tracing::info;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 use crate::bot::command::{AdminCommand, PublicCommand};
 use crate::bot::filter::filter_admin_msg;
+use crate::bot::{ThrottledEditor};
 use crate::bot::handlers::{
     cmd_best_keyboard, cmd_best_text, cmd_challenge_keyboard, gallery_preview_url,
 };
@@ -101,8 +101,12 @@ async fn cmd_upload(
     
     let mut results = Vec::new();
     
-    // 创建消息更新时间控制
-    let last_update_time = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(10)));
+    // 创建智能的消息编辑器，结合节流和重试功能
+    let inner_bot = teloxide::Bot::new(std::env::var("TELOXIDE_TOKEN").unwrap_or_default());
+    let throttled_editor = Arc::new(ThrottledEditor::new(
+        inner_bot, 
+        Duration::from_secs(5)
+    ));
     
     for (index, gallery) in galleries.iter().enumerate() {
         info!("Processing gallery ID: {}", gallery.id());
@@ -117,7 +121,7 @@ async fn cmd_upload(
             create_progress_bar_public(index, galleries.len(), &current_results)
         );
         
-        edit_message_with_throttle(&bot, msg.chat.id, progress_msg.id, processing_text, last_update_time.clone()).await;
+        throttled_editor.edit_message_throttled(msg.chat.id, progress_msg.id, processing_text).await.ok();
         
         // 检查权限
         if GalleryEntity::get(gallery.id()).await?.is_none() {
@@ -144,7 +148,7 @@ async fn cmd_upload(
             create_progress_bar_public(index + 1, galleries.len(), &results)
         );
         
-        edit_message_with_throttle(&bot, msg.chat.id, progress_msg.id, progress_text, last_update_time.clone()).await;
+        throttled_editor.edit_message_throttled(msg.chat.id, progress_msg.id, progress_text).await.ok();
     }
     
     // 最终结果
@@ -191,26 +195,6 @@ fn create_final_summary_public(results: &[(i32, bool, String)]) -> String {
     text
 }
 
-// 带时间间隔控制的消息编辑函数
-async fn edit_message_with_throttle(
-    bot: &Bot,
-    chat_id: ChatId,
-    message_id: MessageId,
-    text: String,
-    last_update_time: Arc<Mutex<Instant>>
-) {
-    // 检查是否需要限制更新频率
-    {
-        let mut last_update = last_update_time.lock().await;
-        let now = Instant::now();
-        if now.duration_since(*last_update) < Duration::from_secs(5) {
-            return; // 跳过更新，避免频繁调用 API
-        }
-        *last_update = now;
-    }
-    
-    bot.edit_message_text(chat_id, message_id, text).await.ok();
-}
 
 async fn cmd_challenge(
     bot: Bot,

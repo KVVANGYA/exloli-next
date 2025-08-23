@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use crate::bot::command::AdminCommand;
 use crate::bot::filter::filter_admin_msg;
-use crate::bot::Bot;
+use crate::bot::{Bot, ThrottledEditor};
 use crate::database::{GalleryEntity, MessageEntity};
 use crate::ehentai::EhGalleryUrl;
 use crate::uploader::{ExloliUploader, UploadProgress};
@@ -159,8 +159,12 @@ async fn cmd_upload_inner(
             status_message: "开始处理".to_string(),
         }));
         
-        // 创建消息更新时间控制
-        let last_update_time = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(10)));
+        // 创建智能的消息编辑器，结合节流和重试功能
+        let inner_bot = teloxide::Bot::new(std::env::var("TELOXIDE_TOKEN").unwrap_or_default());
+        let throttled_editor = Arc::new(ThrottledEditor::new(
+            inner_bot, 
+            Duration::from_secs(5)
+        ));
         
         let bot_clone = bot.clone();
         let msg_clone = msg.clone();
@@ -170,15 +174,15 @@ async fn cmd_upload_inner(
         // 执行带进度跟踪的上传
         let galleries_clone = galleries.clone();
         let results_clone = results.clone();
-        let last_update_clone = last_update_time.clone();
+        let editor_clone = throttled_editor.clone();
         let callback = Arc::new(move |prog: GalleryProgress| {
             let bot = bot_clone.clone();
             let msg = msg_clone.clone();
             let galleries = galleries_clone.clone();
             let results = results_clone.clone();
-            let last_update = last_update_clone.clone();
+            let editor = editor_clone.clone();
             async move {
-                update_gallery_progress_throttled(&bot, msg.chat.id, progress_msg_id, index, &galleries, &results, &prog, last_update).await.ok();
+                update_gallery_progress_with_editor(&bot, msg.chat.id, progress_msg_id, index, &galleries, &results, &prog, editor).await.ok();
             }
         });
         
@@ -324,7 +328,22 @@ where
 }
 
 
-// 带时间间隔控制的画廊进度更新函数
+// 使用 ThrottledEditor 的画廊进度更新函数
+async fn update_gallery_progress_with_editor(
+    _bot: &Bot,
+    chat_id: ChatId,
+    message_id: MessageId,
+    current_gallery_index: usize,
+    all_galleries: &[EhGalleryUrl],
+    completed_results: &[(i32, bool, String)],
+    current_progress: &GalleryProgress,
+    editor: Arc<ThrottledEditor>
+) -> Result<()> {
+    let text = create_gallery_progress_text(current_gallery_index, all_galleries, completed_results, current_progress);
+    editor.edit_message_throttled(chat_id, message_id, text).await.map_err(|e| anyhow::anyhow!("Failed to edit message: {}", e))
+}
+
+// 带时间间隔控制的画廊进度更新函数（保留作为备用）
 async fn update_gallery_progress_throttled(
     bot: &Bot,
     chat_id: ChatId,
@@ -348,16 +367,13 @@ async fn update_gallery_progress_throttled(
     update_gallery_progress(bot, chat_id, message_id, current_gallery_index, all_galleries, completed_results, current_progress).await
 }
 
-// 更新画廊进度显示
-async fn update_gallery_progress(
-    bot: &Bot,
-    chat_id: ChatId,
-    message_id: MessageId,
+// 生成画廊进度文本
+fn create_gallery_progress_text(
     current_gallery_index: usize,
     all_galleries: &[EhGalleryUrl],
     completed_results: &[(i32, bool, String)],
     current_progress: &GalleryProgress
-) -> Result<()> {
+) -> String {
     let mut text = format!(
         "📤 上传进度 ({}/{})\n\n",
         current_gallery_index + 1,
@@ -395,6 +411,20 @@ async fn update_gallery_progress(
     let overall_progress = create_progress_bar(current_gallery_index, all_galleries.len(), completed_results);
     text.push_str(&overall_progress);
     
+    text
+}
+
+// 更新画廊进度显示
+async fn update_gallery_progress(
+    bot: &Bot,
+    chat_id: ChatId,
+    message_id: MessageId,
+    current_gallery_index: usize,
+    all_galleries: &[EhGalleryUrl],
+    completed_results: &[(i32, bool, String)],
+    current_progress: &GalleryProgress
+) -> Result<()> {
+    let text = create_gallery_progress_text(current_gallery_index, all_galleries, completed_results, current_progress);
     bot.edit_message_text(chat_id, message_id, text).await.ok();
     Ok(())
 }
