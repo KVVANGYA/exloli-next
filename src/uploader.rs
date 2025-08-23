@@ -92,7 +92,7 @@ impl ExloliUploader {
     /// 为了避免绕晕自己，这次不考虑父子画廊，只要 id 不同就视为新画廊，只要是新画廊就进行上传
     #[tracing::instrument(skip(self))]
     pub async fn try_upload(&self, gallery: &EhGalleryUrl, check: bool) -> Result<()> {
-        self.try_upload_with_progress(gallery, check, None).await
+        self.try_upload_with_progress(gallery, check, None::<fn(UploadProgress) -> std::future::Ready<()>>).await
     }
 
     /// 带进度回调的上传方法

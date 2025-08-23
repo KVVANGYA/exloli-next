@@ -10,8 +10,8 @@ use tokio::sync::Mutex;
 use crate::bot::command::AdminCommand;
 use crate::bot::filter::filter_admin_msg;
 use crate::bot::Bot;
-use crate::database::{GalleryEntity, MessageEntity, ImageEntity};
-use crate::ehentai::{EhGalleryUrl, EhGallery};
+use crate::database::{GalleryEntity, MessageEntity};
+use crate::ehentai::EhGalleryUrl;
 use crate::uploader::{ExloliUploader, UploadProgress};
 use crate::{reply_to, try_with_reply};
 
@@ -317,112 +317,6 @@ where
     }
 }
 
-// 原来的带进度跟踪的上传函数（保留作为备用）
-async fn upload_with_progress<F, Fut>(
-    uploader: &ExloliUploader, 
-    gallery_url: &EhGalleryUrl, 
-    check: bool,
-    progress: Arc<Mutex<GalleryProgress>>,
-    callback: Arc<F>
-) -> Result<()> 
-where 
-    F: Fn(GalleryProgress) -> Fut + Send + Sync + 'static,
-    Fut: std::future::Future<Output = ()> + Send + 'static,
-{
-    // 检查是否需要上传
-    if check 
-        && GalleryEntity::check(gallery_url.id()).await?
-        && MessageEntity::get_by_gallery(gallery_url.id()).await?.is_some()
-    {
-        let mut prog = progress.lock().await;
-        prog.current_stage = UploadStage::Complete;
-        prog.status_message = "已存在，跳过".to_string();
-        callback(prog.clone()).await;
-        return Ok(());
-    }
-
-    // 更新进度：开始获取画廊信息
-    {
-        let mut prog = progress.lock().await;
-        prog.current_stage = UploadStage::Scanning;
-        prog.status_message = "获取画廊信息...".to_string();
-        callback(prog.clone()).await;
-    }
-
-    // 由于无法直接访问私有字段，我们使用简化的进度跟踪
-    // 启动一个任务来监控上传进度
-    let progress_monitor = progress.clone();
-    let gallery_id = gallery_url.id();
-    let callback_clone = callback.clone();
-    
-    // 获取开始时的页面计数
-    let initial_count = count_uploaded_pages(gallery_id).await.unwrap_or(0);
-    
-    let progress_task = tokio::spawn(async move {
-        let start_time = tokio::time::Instant::now();
-        let mut last_uploaded = initial_count;
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-            
-            // 检查当前已上传的页数
-            let current_uploaded = match count_uploaded_pages(gallery_id).await {
-                Ok(count) => count,
-                Err(_) => continue,
-            };
-            
-            if current_uploaded > last_uploaded {
-                let mut prog = progress_monitor.lock().await;
-                prog.uploaded_pages = current_uploaded - initial_count;
-                prog.downloaded_pages = current_uploaded - initial_count;
-                prog.parsed_pages = current_uploaded - initial_count;
-                prog.current_stage = UploadStage::Uploading;
-                prog.status_message = format!("上传中 (新增 {} 页面)", current_uploaded - initial_count);
-                callback_clone(prog.clone()).await;
-                last_uploaded = current_uploaded;
-            }
-            
-            // 简单的超时机制，避免无限循环
-            if start_time.elapsed() > tokio::time::Duration::from_secs(300) {
-                break;
-            }
-        }
-    });
-
-    // 调用原始上传方法
-    let upload_result = uploader.try_upload(gallery_url, check).await;
-    
-    // 停止监控任务
-    progress_task.abort();
-    
-    match upload_result {
-        Ok(_) => {
-            let final_count = count_uploaded_pages(gallery_id).await.unwrap_or(0);
-            let mut prog = progress.lock().await;
-            prog.current_stage = UploadStage::Complete;
-            prog.uploaded_pages = final_count.saturating_sub(initial_count);
-            prog.downloaded_pages = final_count.saturating_sub(initial_count);
-            prog.parsed_pages = final_count.saturating_sub(initial_count);
-            prog.status_message = "上传完成".to_string();
-            callback(prog.clone()).await;
-        }
-        Err(e) => {
-            let mut prog = progress.lock().await;
-            prog.current_stage = UploadStage::Failed(e.to_string());
-            prog.status_message = format!("上传失败: {}", e);
-            callback(prog.clone()).await;
-            return Err(e);
-        }
-    }
-
-    Ok(())
-}
-
-// 统计已上传的页面数
-async fn count_uploaded_pages(gallery_id: i32) -> Result<usize> {
-    use crate::database::PageEntity;
-    let count = PageEntity::count(gallery_id).await?;
-    Ok(count as usize)
-}
 
 // 更新画廊进度显示
 async fn update_gallery_progress(
