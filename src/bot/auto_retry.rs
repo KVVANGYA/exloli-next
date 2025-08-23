@@ -1,8 +1,10 @@
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{warn, debug};
-use teloxide::{Bot, RequestError, ApiError};
+use teloxide::Bot;
 use teloxide::types::{ChatId, MessageId};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 /// Auto-retry wrapper for Telegram Bot API calls with rate limiting handling
 pub struct AutoRetryBot {
@@ -30,13 +32,13 @@ impl AutoRetryBot {
         self
     }
 
-    /// Edit message text with automatic retry on rate limiting
+    /// Edit message text with automatic retry on network errors
     pub async fn edit_message_text_with_retry<T>(
         &self,
         chat_id: ChatId,
         message_id: MessageId,
         text: T,
-    ) -> Result<(), RequestError>
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
     where
         T: Into<String> + Clone,
     {
@@ -48,101 +50,36 @@ impl AutoRetryBot {
                     debug!("Message edited successfully after {} attempts", attempts + 1);
                     return Ok(());
                 }
-                Err(RequestError::Api(ApiError::RetryAfter(retry_after))) => {
+                Err(error) => {
                     attempts += 1;
                     if attempts > self.max_retries {
-                        warn!("Max retries ({}) exceeded for editing message", self.max_retries);
-                        return Err(RequestError::Api(ApiError::RetryAfter(retry_after)));
+                        warn!("Max retries ({}) exceeded for editing message: {:?}", self.max_retries, error);
+                        return Err(Box::new(error));
                     }
                     
-                    let delay = Duration::from_secs(retry_after.into());
-                    warn!(
-                        "Rate limited, retrying in {} seconds (attempt {}/{})", 
-                        retry_after, attempts, self.max_retries
-                    );
-                    sleep(delay).await;
-                    continue;
-                }
-                Err(RequestError::Api(ApiError::TooManyRequests { retry_after })) => {
-                    attempts += 1;
-                    if attempts > self.max_retries {
-                        warn!("Max retries ({}) exceeded for editing message", self.max_retries);
-                        return Err(RequestError::Api(ApiError::TooManyRequests { retry_after }));
+                    // Check if it's a rate limiting error by examining the error message
+                    let error_str = error.to_string();
+                    if error_str.contains("Too Many Requests") || error_str.contains("retry_after") {
+                        let delay = self.base_delay * attempts;
+                        warn!(
+                            "Rate limiting detected, retrying in {} seconds (attempt {}/{})", 
+                            delay.as_secs(), attempts, self.max_retries
+                        );
+                        sleep(delay).await;
+                        continue;
+                    } else if error_str.contains("timeout") || error_str.contains("network") {
+                        let delay = self.base_delay * attempts;
+                        warn!(
+                            "Network error, retrying in {} seconds (attempt {}/{})", 
+                            delay.as_secs(), attempts, self.max_retries
+                        );
+                        sleep(delay).await;
+                        continue;
+                    } else {
+                        // For other errors, fail immediately
+                        debug!("Non-retryable error: {:?}", error);
+                        return Err(Box::new(error));
                     }
-                    
-                    let delay = retry_after
-                        .map(|seconds| Duration::from_secs(seconds.into()))
-                        .unwrap_or(self.base_delay * attempts);
-                    
-                    warn!(
-                        "Too many requests, retrying in {} seconds (attempt {}/{})", 
-                        delay.as_secs(), attempts, self.max_retries
-                    );
-                    sleep(delay).await;
-                    continue;
-                }
-                Err(other_error) => {
-                    // For non-rate-limiting errors, fail immediately
-                    debug!("Non-retryable error: {:?}", other_error);
-                    return Err(other_error);
-                }
-            }
-        }
-    }
-
-    /// Send message with automatic retry on rate limiting
-    pub async fn send_message_with_retry<T>(
-        &self,
-        chat_id: ChatId,
-        text: T,
-    ) -> Result<teloxide::types::Message, RequestError>
-    where
-        T: Into<String> + Clone,
-    {
-        let mut attempts = 0;
-        
-        loop {
-            match self.bot.send_message(chat_id, text.clone()).await {
-                Ok(message) => {
-                    debug!("Message sent successfully after {} attempts", attempts + 1);
-                    return Ok(message);
-                }
-                Err(RequestError::Api(ApiError::RetryAfter(retry_after))) => {
-                    attempts += 1;
-                    if attempts > self.max_retries {
-                        warn!("Max retries ({}) exceeded for sending message", self.max_retries);
-                        return Err(RequestError::Api(ApiError::RetryAfter(retry_after)));
-                    }
-                    
-                    let delay = Duration::from_secs(retry_after.into());
-                    warn!(
-                        "Rate limited, retrying in {} seconds (attempt {}/{})", 
-                        retry_after, attempts, self.max_retries
-                    );
-                    sleep(delay).await;
-                    continue;
-                }
-                Err(RequestError::Api(ApiError::TooManyRequests { retry_after })) => {
-                    attempts += 1;
-                    if attempts > self.max_retries {
-                        warn!("Max retries ({}) exceeded for sending message", self.max_retries);
-                        return Err(RequestError::Api(ApiError::TooManyRequests { retry_after }));
-                    }
-                    
-                    let delay = retry_after
-                        .map(|seconds| Duration::from_secs(seconds.into()))
-                        .unwrap_or(self.base_delay * attempts);
-                    
-                    warn!(
-                        "Too many requests, retrying in {} seconds (attempt {}/{})", 
-                        delay.as_secs(), attempts, self.max_retries
-                    );
-                    sleep(delay).await;
-                    continue;
-                }
-                Err(other_error) => {
-                    debug!("Non-retryable error: {:?}", other_error);
-                    return Err(other_error);
                 }
             }
         }
@@ -178,7 +115,7 @@ impl ThrottledEditor {
         chat_id: ChatId,
         message_id: MessageId,
         text: T,
-    ) -> Result<(), RequestError>
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
     where
         T: Into<String> + Clone,
     {
