@@ -113,10 +113,11 @@ async fn cmd_upload(
         
         bot.edit_message_text(msg.chat.id, progress_msg.id, processing_text).await.ok();
         
-        // 检查权限并执行上传
+        // 检查权限
         if GalleryEntity::get(gallery.id()).await?.is_none() {
             results.push((gallery.id(), false, "非管理员只能上传存在上传记录的画廊".to_string()));
         } else {
+            // 创建进度跟踪（简化版本，因为公共命令权限限制）
             match uploader.try_upload(gallery, true).await {
                 Ok(_) => {
                     info!("Upload successful for gallery {}", gallery.id());
