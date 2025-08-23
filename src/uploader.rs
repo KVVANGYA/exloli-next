@@ -226,19 +226,37 @@ impl ExloliUploader {
         // 扫描所有图片
         // 对于已经上传过的图片，不需要重复上传，只需要插入 PageEntity 记录即可
         let mut pages = vec![];
+        let mut already_uploaded = 0;
         for page in &gallery.pages {
             match ImageEntity::get_by_hash(page.hash()).await? {
                 Some(img) => {
                     // NOTE: 此处存在重复插入的可能，但是由于 PageEntity::create 使用 OR IGNORE，所以不影响
                     PageEntity::create(page.gallery_id(), page.page(), img.id).await?;
+                    already_uploaded += 1;
                 }
                 None => pages.push(page.clone()),
             }
         }
-        info!("需要下载&上传 {} 张图片", pages.len());
+        info!("需要下载&上传 {} 张图片，已存在 {} 张", pages.len(), already_uploaded);
+
+        if pages.is_empty() {
+            // 如果所有图片都已经上传过，触发一次完成回调
+            if let Some(callback) = progress_callback {
+                let final_progress = UploadProgress {
+                    gallery_id: gallery.url.id(),
+                    total_pages: gallery.pages.len(),
+                    downloaded_pages: already_uploaded,
+                    uploaded_pages: already_uploaded,
+                    parsed_pages: already_uploaded,
+                };
+                callback(final_progress).await;
+            }
+            return Ok(());
+        }
 
         let concurrent = self.config.threads_num;
-        let (tx, mut rx) = tokio::sync::mpsc::channel(concurrent * 2);
+        // 使用更合理的通道容量：并发数的2倍，避免内存占用过高
+        let (parse_tx, parse_rx) = tokio::sync::mpsc::channel(concurrent * 2);
         let client = self.ehentai.clone();
         
         // 进度跟踪变量
@@ -247,16 +265,16 @@ impl ExloliUploader {
         let progress = Arc::new(Mutex::new(UploadProgress {
             gallery_id: gallery.url.id(),
             total_pages: gallery.pages.len(),
-            downloaded_pages: 0,
-            uploaded_pages: 0,
-            parsed_pages: 0,
+            downloaded_pages: already_uploaded,
+            uploaded_pages: already_uploaded,
+            parsed_pages: already_uploaded,
         }));
-        let progress_clone = progress.clone();
+        
         let callback_arc = progress_callback.map(Arc::new);
-        let callback_clone1 = callback_arc.clone();
-        let callback_clone2 = callback_arc.clone();
         
         // 获取图片链接时不要并行，避免触发反爬限制
+        let progress_clone_parser = progress.clone();
+        let callback_clone_parser = callback_arc.clone();
         let getter = tokio::spawn(
             async move {
                 for page in pages {
@@ -264,67 +282,142 @@ impl ExloliUploader {
                     info!("已解析：{}", page.page());
                     
                     // 更新解析进度
-                    if let Some(ref callback) = callback_clone1 {
-                        let mut prog = progress_clone.lock().await;
+                    if let Some(ref callback) = callback_clone_parser {
+                        let mut prog = progress_clone_parser.lock().await;
                         prog.parsed_pages += 1;
                         callback(prog.clone()).await;
                     }
                     
-                    tx.send((page, rst)).await?;
+                    // 如果发送失败（通道关闭），提前退出
+                    if parse_tx.send((page, rst)).await.is_err() {
+                        break;
+                    }
                 }
+                drop(parse_tx); // 关闭发送端，让接收端知道没有更多数据
                 Result::<()>::Ok(())
             }
             .in_current_span(),
         );
 
-        // 依次将图片下载并上传到 r2，并插入 ImageEntity 和 PageEntity 记录
+        // 创建下载上传的并发任务
         let s3 = S3Uploader::new(
             self.config.ipfs.gateway_host.clone(),
             self.config.ipfs.gateway_date.clone(),
             self.config.ipfs.teletype_token.clone(),
         )?;
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .connect_timeout(Duration::from_secs(30))
-            .build()?;
-        let progress_clone2 = progress.clone();
-        let uploader = tokio::spawn(
-            async move {
-                while let Some((page, (fileindex, url))) = rx.recv().await {
-                    let suffix = url.split('.').last().unwrap_or("jpg");
-                    if suffix == "gif" {
-                        continue;
+        
+        // 使用 Semaphore 来控制并发数量
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrent));
+        let mut upload_handles = vec![];
+        let parse_rx = Arc::new(tokio::sync::Mutex::new(parse_rx));
+        
+        // 启动并发的下载上传任务
+        for _ in 0..concurrent {
+            let sem = semaphore.clone();
+            let rx = parse_rx.clone();
+            let progress_clone = progress.clone();
+            let callback_clone = callback_arc.clone();
+            let s3_clone = s3.clone();
+            
+            let client = Client::builder()
+                .timeout(Duration::from_secs(30))
+                .connect_timeout(Duration::from_secs(30))
+                .build()?;
+            
+            let handle = tokio::spawn(
+                async move {
+                    loop {
+                        // 获取下一个任务
+                        let task = {
+                            let mut rx_guard = rx.lock().await;
+                            rx_guard.recv().await
+                        };
+                        
+                        let (page, (fileindex, url)) = match task {
+                            Some(data) => data,
+                            None => break, // 没有更多任务
+                        };
+                        
+                        // 获取信号量许可，控制并发
+                        let _permit = sem.acquire().await.unwrap();
+                        
+                        // 跳过 GIF 文件
+                        let suffix = url.split('.').last().unwrap_or("jpg");
+                        if suffix == "gif" {
+                            continue;
+                        }
+                        
+                        // 下载图片
+                        let filename = format!("{}.{}", page.hash(), suffix);
+                        let bytes = match client.get(&url).send().await {
+                            Ok(response) => match response.bytes().await {
+                                Ok(bytes) => bytes,
+                                Err(e) => {
+                                    error!("下载图片失败 {}: {}", page.page(), e);
+                                    continue;
+                                }
+                            },
+                            Err(e) => {
+                                error!("请求图片失败 {}: {}", page.page(), e);
+                                continue;
+                            }
+                        };
+                        debug!("已下载: {}", page.page());
+                        
+                        // 更新下载进度
+                        if let Some(ref callback) = callback_clone {
+                            let mut prog = progress_clone.lock().await;
+                            prog.downloaded_pages += 1;
+                            callback(prog.clone()).await;
+                        }
+                        
+                        // 上传到 S3
+                        let upload_url = match s3_clone.upload(&filename, &mut bytes.as_ref()).await {
+                            Ok(url) => url,
+                            Err(e) => {
+                                error!("上传图片失败 {}: {}", page.page(), e);
+                                continue;
+                            }
+                        };
+                        debug!("已上传: {}", page.page());
+                        
+                        // 更新上传进度
+                        if let Some(ref callback) = callback_clone {
+                            let mut prog = progress_clone.lock().await;
+                            prog.uploaded_pages += 1;
+                            callback(prog.clone()).await;
+                        }
+                        
+                        // 保存到数据库
+                        if let Err(e) = ImageEntity::create(fileindex, page.hash(), &upload_url).await {
+                            error!("保存图片记录失败 {}: {}", page.page(), e);
+                            continue;
+                        }
+                        if let Err(e) = PageEntity::create(page.gallery_id(), page.page(), fileindex).await {
+                            error!("保存页面记录失败 {}: {}", page.page(), e);
+                        }
                     }
-                    let filename = format!("{}.{}", page.hash(), suffix);
-                    let bytes = client.get(url).send().await?.bytes().await?;
-                    debug!("已下载: {}", page.page());
-                    
-                    // 更新下载进度
-                    if let Some(ref callback) = callback_clone2 {
-                        let mut prog = progress_clone2.lock().await;
-                        prog.downloaded_pages += 1;
-                        callback(prog.clone()).await;
-                    }
-                    
-                    let url = s3.upload(&filename, &mut bytes.as_ref()).await?;
-                    debug!("已上传: {}", page.page());
-                    
-                    // 更新上传进度
-                    if let Some(ref callback) = callback_clone2 {
-                        let mut prog = progress_clone2.lock().await;
-                        prog.uploaded_pages += 1;
-                        callback(prog.clone()).await;
-                    }
-                    
-                    ImageEntity::create(fileindex, page.hash(), &url).await?;
-                    PageEntity::create(page.gallery_id(), page.page(), fileindex).await?;
+                    Result::<()>::Ok(())
                 }
-                Result::<()>::Ok(())
-            }
-            .in_current_span(),
-        );
+                .in_current_span(),
+            );
+            upload_handles.push(handle);
+        }
 
-        tokio::try_join!(flatten(getter), flatten(uploader))?;
+        // 等待解析任务完成
+        let parse_result = flatten(getter).await;
+        
+        // 等待所有上传任务完成
+        let mut upload_results = vec![];
+        for handle in upload_handles {
+            upload_results.push(flatten(handle).await);
+        }
+        
+        // 检查是否有任务失败
+        parse_result?;
+        for result in upload_results {
+            result?;
+        }
 
         Ok(())
     }

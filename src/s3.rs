@@ -3,6 +3,7 @@ use reqwest::Client;
 use tokio::io::AsyncReadExt;
 use tracing::{debug, error};
 
+#[derive(Clone)]
 pub struct S3Uploader {
     client: Client,
     gateway_host: String,
