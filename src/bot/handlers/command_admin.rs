@@ -272,103 +272,65 @@ where
         callback(prog.clone()).await;
     }
 
-    let gallery = uploader.ehentai.get_gallery(gallery_url).await?;
+    // 由于无法直接访问私有字段，我们使用简化的进度跟踪
+    // 启动一个任务来监控上传进度
+    let progress_monitor = progress.clone();
+    let gallery_id = gallery_url.id();
+    let callback_clone = callback.clone();
     
-    // 更新进度：扫描已存在的图片
-    {
-        let mut prog = progress.lock().await;
-        prog.total_pages = gallery.pages.len();
-        prog.current_stage = UploadStage::Scanning;
-        prog.status_message = "扫描已存在图片...".to_string();
-        callback(prog.clone()).await;
-    }
-
-    // 扫描已存在的图片
-    let mut pages_to_upload = vec![];
-    let mut existing_count = 0;
+    // 获取开始时的页面计数
+    let initial_count = count_uploaded_pages(gallery_id).await.unwrap_or(0);
     
-    for page in &gallery.pages {
-        match ImageEntity::get_by_hash(page.hash()).await? {
-            Some(_img) => {
-                existing_count += 1;
+    let progress_task = tokio::spawn(async move {
+        let start_time = tokio::time::Instant::now();
+        let mut last_uploaded = initial_count;
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+            
+            // 检查当前已上传的页数
+            let current_uploaded = match count_uploaded_pages(gallery_id).await {
+                Ok(count) => count,
+                Err(_) => continue,
+            };
+            
+            if current_uploaded > last_uploaded {
+                let mut prog = progress_monitor.lock().await;
+                prog.uploaded_pages = current_uploaded - initial_count;
+                prog.current_stage = UploadStage::Uploading;
+                prog.status_message = format!("上传中 (新增 {} 页面)", current_uploaded - initial_count);
+                callback_clone(prog.clone()).await;
+                last_uploaded = current_uploaded;
             }
-            None => pages_to_upload.push(page.clone()),
-        }
-    }
-
-    // 更新进度：开始上传
-    {
-        let mut prog = progress.lock().await;
-        prog.existing_pages = existing_count;
-        prog.current_stage = UploadStage::Uploading;
-        prog.status_message = format!("需要上传 {} 张图片", pages_to_upload.len());
-        callback(prog.clone()).await;
-    }
-
-    if !pages_to_upload.is_empty() {
-        // 在这里我们需要模拟原始的上传逻辑，但是添加进度回调
-        // 由于原始方法是私有的，我们需要调用原始方法并定期检查数据库状态
-        
-        // 启动一个任务来监控上传进度
-        let progress_monitor = progress.clone();
-        let gallery_id = gallery.url.id();
-        let total_new_pages = pages_to_upload.len();
-        let callback_clone = callback.clone();
-        let progress_task = tokio::spawn(async move {
-            let mut last_uploaded = 0;
-            loop {
-                tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-                
-                // 检查当前已上传的页数
-                let current_uploaded = match count_uploaded_pages(gallery_id).await {
-                    Ok(count) => count.saturating_sub(existing_count),
-                    Err(_) => continue,
-                };
-                
-                if current_uploaded > last_uploaded {
-                    let mut prog = progress_monitor.lock().await;
-                    prog.uploaded_pages = current_uploaded;
-                    prog.status_message = format!("上传中 ({}/{})", current_uploaded, total_new_pages);
-                    callback_clone(prog.clone()).await;
-                    last_uploaded = current_uploaded;
-                }
-                
-                // 如果所有页面都上传完成，退出监控
-                if current_uploaded >= total_new_pages {
-                    break;
-                }
-            }
-        });
-
-        // 调用原始上传方法
-        let upload_result = uploader.try_upload(gallery_url, check).await;
-        
-        // 停止监控任务
-        progress_task.abort();
-        
-        match upload_result {
-            Ok(_) => {
-                let mut prog = progress.lock().await;
-                prog.current_stage = UploadStage::Complete;
-                prog.uploaded_pages = total_new_pages;
-                prog.status_message = "上传完成".to_string();
-                callback(prog.clone()).await;
-            }
-            Err(e) => {
-                let mut prog = progress.lock().await;
-                prog.current_stage = UploadStage::Failed(e.to_string());
-                prog.status_message = format!("上传失败: {}", e);
-                callback(prog.clone()).await;
-                return Err(e);
+            
+            // 简单的超时机制，避免无限循环
+            if start_time.elapsed() > tokio::time::Duration::from_secs(300) {
+                break;
             }
         }
-    } else {
-        // 没有新图片需要上传，直接调用原始方法完成其他步骤
-        uploader.try_upload(gallery_url, check).await?;
-        let mut prog = progress.lock().await;
-        prog.current_stage = UploadStage::Complete;
-        prog.status_message = "所有图片已存在，完成发布".to_string();
-        callback(prog.clone()).await;
+    });
+
+    // 调用原始上传方法
+    let upload_result = uploader.try_upload(gallery_url, check).await;
+    
+    // 停止监控任务
+    progress_task.abort();
+    
+    match upload_result {
+        Ok(_) => {
+            let final_count = count_uploaded_pages(gallery_id).await.unwrap_or(0);
+            let mut prog = progress.lock().await;
+            prog.current_stage = UploadStage::Complete;
+            prog.uploaded_pages = final_count.saturating_sub(initial_count);
+            prog.status_message = "上传完成".to_string();
+            callback(prog.clone()).await;
+        }
+        Err(e) => {
+            let mut prog = progress.lock().await;
+            prog.current_stage = UploadStage::Failed(e.to_string());
+            prog.status_message = format!("上传失败: {}", e);
+            callback(prog.clone()).await;
+            return Err(e);
+        }
     }
 
     Ok(())
