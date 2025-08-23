@@ -20,8 +20,9 @@ pub struct GalleryProgress {
     pub gallery_id: i32,
     pub total_pages: usize,
     pub existing_pages: usize,
-    pub resolved_pages: usize,
+    pub downloaded_pages: usize,
     pub uploaded_pages: usize,
+    pub parsed_pages: usize,
     pub current_stage: UploadStage,
     pub status_message: String,
 }
@@ -150,8 +151,9 @@ async fn cmd_upload_inner(
             gallery_id: gallery.id(),
             total_pages: 0,
             existing_pages: 0,
-            resolved_pages: 0,
+            downloaded_pages: 0,
             uploaded_pages: 0,
+            parsed_pages: 0,
             current_stage: UploadStage::Starting,
             status_message: "开始处理".to_string(),
         }));
@@ -296,6 +298,8 @@ where
             if current_uploaded > last_uploaded {
                 let mut prog = progress_monitor.lock().await;
                 prog.uploaded_pages = current_uploaded - initial_count;
+                prog.downloaded_pages = current_uploaded - initial_count;
+                prog.parsed_pages = current_uploaded - initial_count;
                 prog.current_stage = UploadStage::Uploading;
                 prog.status_message = format!("上传中 (新增 {} 页面)", current_uploaded - initial_count);
                 callback_clone(prog.clone()).await;
@@ -321,6 +325,8 @@ where
             let mut prog = progress.lock().await;
             prog.current_stage = UploadStage::Complete;
             prog.uploaded_pages = final_count.saturating_sub(initial_count);
+            prog.downloaded_pages = final_count.saturating_sub(initial_count);
+            prog.parsed_pages = final_count.saturating_sub(initial_count);
             prog.status_message = "上传完成".to_string();
             callback(prog.clone()).await;
         }
@@ -363,6 +369,11 @@ async fn update_gallery_progress(
     text.push_str(&format!("当前画廊: {}\n", current_progress.gallery_id));
     text.push_str(&format!("阶段: {:?}\n", current_progress.current_stage));
     text.push_str(&format!("状态: {}\n", current_progress.status_message));
+    
+    // 显示已解析、已下载、已上传的数量
+    text.push_str(&format!("📋 已解析: {}\n", current_progress.parsed_pages));
+    text.push_str(&format!("⬇️ 已下载: {}\n", current_progress.downloaded_pages));
+    text.push_str(&format!("⬆️ 已上传: {}\n", current_progress.uploaded_pages));
     
     if current_progress.total_pages > 0 {
         let total_to_process = current_progress.total_pages - current_progress.existing_pages;
