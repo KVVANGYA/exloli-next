@@ -25,6 +25,15 @@ use crate::tags::EhTagTransDB;
 use crate::utils::pad_left;
 
 #[derive(Debug, Clone)]
+pub struct UploadProgress {
+    pub gallery_id: i32,
+    pub total_pages: usize,
+    pub downloaded_pages: usize,
+    pub uploaded_pages: usize, 
+    pub parsed_pages: usize,
+}
+
+#[derive(Debug, Clone)]
 pub struct ExloliUploader {
     ehentai: EhClient,
     telegraph: Telegraph,
@@ -83,6 +92,21 @@ impl ExloliUploader {
     /// 为了避免绕晕自己，这次不考虑父子画廊，只要 id 不同就视为新画廊，只要是新画廊就进行上传
     #[tracing::instrument(skip(self))]
     pub async fn try_upload(&self, gallery: &EhGalleryUrl, check: bool) -> Result<()> {
+        self.try_upload_with_progress(gallery, check, None).await
+    }
+
+    /// 带进度回调的上传方法
+    #[tracing::instrument(skip(self, progress_callback))]
+    pub async fn try_upload_with_progress<F, Fut>(
+        &self,
+        gallery: &EhGalleryUrl,
+        check: bool,
+        progress_callback: Option<F>,
+    ) -> Result<()>
+    where
+        F: Fn(UploadProgress) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
         if check
             && GalleryEntity::check(gallery.id()).await?
             && MessageEntity::get_by_gallery(gallery.id()).await?.is_some()
@@ -92,7 +116,7 @@ impl ExloliUploader {
 
         let gallery = self.ehentai.get_gallery(gallery).await?;
         // 上传图片、发布文章
-        self.upload_gallery_image(&gallery).await?;
+        self.upload_gallery_image_with_progress(&gallery, progress_callback).await?;
         let article = self.publish_telegraph_article(&gallery).await?;
         // 发送消息
         let text = self.create_message_text(&gallery, &article.url).await?;
@@ -186,6 +210,19 @@ impl ExloliUploader {
 impl ExloliUploader {
     /// 获取某个画廊里的所有图片，并且上传到 telegrpah，如果已经上传过的，会跳过上传
     async fn upload_gallery_image(&self, gallery: &EhGallery) -> Result<()> {
+        self.upload_gallery_image_with_progress(gallery, None::<fn(UploadProgress) -> std::future::Ready<()>>).await
+    }
+
+    /// 带进度回调的图片上传方法
+    async fn upload_gallery_image_with_progress<F, Fut>(
+        &self,
+        gallery: &EhGallery,
+        progress_callback: Option<F>,
+    ) -> Result<()>
+    where
+        F: Fn(UploadProgress) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
         // 扫描所有图片
         // 对于已经上传过的图片，不需要重复上传，只需要插入 PageEntity 记录即可
         let mut pages = vec![];
@@ -203,13 +240,36 @@ impl ExloliUploader {
         let concurrent = self.config.threads_num;
         let (tx, mut rx) = tokio::sync::mpsc::channel(concurrent * 2);
         let client = self.ehentai.clone();
-
+        
+        // 进度跟踪变量
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        let progress = Arc::new(Mutex::new(UploadProgress {
+            gallery_id: gallery.url.id(),
+            total_pages: gallery.pages.len(),
+            downloaded_pages: 0,
+            uploaded_pages: 0,
+            parsed_pages: 0,
+        }));
+        let progress_clone = progress.clone();
+        let callback_arc = progress_callback.map(Arc::new);
+        let callback_clone1 = callback_arc.clone();
+        let callback_clone2 = callback_arc.clone();
+        
         // 获取图片链接时不要并行，避免触发反爬限制
         let getter = tokio::spawn(
             async move {
                 for page in pages {
                     let rst = client.get_image_url(&page).await?;
                     info!("已解析：{}", page.page());
+                    
+                    // 更新解析进度
+                    if let Some(ref callback) = callback_clone1 {
+                        let mut prog = progress_clone.lock().await;
+                        prog.parsed_pages += 1;
+                        callback(prog.clone()).await;
+                    }
+                    
                     tx.send((page, rst)).await?;
                 }
                 Result::<()>::Ok(())
@@ -227,6 +287,7 @@ impl ExloliUploader {
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(30))
             .build()?;
+        let progress_clone2 = progress.clone();
         let uploader = tokio::spawn(
             async move {
                 while let Some((page, (fileindex, url))) = rx.recv().await {
@@ -237,8 +298,24 @@ impl ExloliUploader {
                     let filename = format!("{}.{}", page.hash(), suffix);
                     let bytes = client.get(url).send().await?.bytes().await?;
                     debug!("已下载: {}", page.page());
+                    
+                    // 更新下载进度
+                    if let Some(ref callback) = callback_clone2 {
+                        let mut prog = progress_clone2.lock().await;
+                        prog.downloaded_pages += 1;
+                        callback(prog.clone()).await;
+                    }
+                    
                     let url = s3.upload(&filename, &mut bytes.as_ref()).await?;
                     debug!("已上传: {}", page.page());
+                    
+                    // 更新上传进度
+                    if let Some(ref callback) = callback_clone2 {
+                        let mut prog = progress_clone2.lock().await;
+                        prog.uploaded_pages += 1;
+                        callback(prog.clone()).await;
+                    }
+                    
                     ImageEntity::create(fileindex, page.hash(), &url).await?;
                     PageEntity::create(page.gallery_id(), page.page(), fileindex).await?;
                 }

@@ -12,7 +12,7 @@ use crate::bot::filter::filter_admin_msg;
 use crate::bot::Bot;
 use crate::database::{GalleryEntity, MessageEntity, ImageEntity};
 use crate::ehentai::{EhGalleryUrl, EhGallery};
-use crate::uploader::ExloliUploader;
+use crate::uploader::{ExloliUploader, UploadProgress};
 use crate::{reply_to, try_with_reply};
 
 #[derive(Clone)]
@@ -176,7 +176,7 @@ async fn cmd_upload_inner(
             }
         });
         
-        match upload_with_progress(&uploader, gallery, false, progress_clone, callback).await {
+        match upload_with_progress_new(&uploader, gallery, false, progress_clone, callback).await {
             Ok(_) => {
                 info!("Upload successful for gallery {}", gallery.id());
                 results.push((gallery.id(), true, "上传成功".to_string()));
@@ -242,7 +242,82 @@ fn create_final_summary(results: &[(i32, bool, String)]) -> String {
     text
 }
 
-// 带进度跟踪的上传函数
+// 新的带进度跟踪的上传函数
+async fn upload_with_progress_new<F, Fut>(
+    uploader: &ExloliUploader, 
+    gallery_url: &EhGalleryUrl, 
+    check: bool,
+    progress: Arc<Mutex<GalleryProgress>>,
+    callback: Arc<F>
+) -> Result<()> 
+where 
+    F: Fn(GalleryProgress) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    // 检查是否需要上传
+    if check 
+        && GalleryEntity::check(gallery_url.id()).await?
+        && MessageEntity::get_by_gallery(gallery_url.id()).await?.is_some()
+    {
+        let mut prog = progress.lock().await;
+        prog.current_stage = UploadStage::Complete;
+        prog.status_message = "已存在，跳过".to_string();
+        callback(prog.clone()).await;
+        return Ok(());
+    }
+
+    // 更新进度：开始获取画廊信息
+    {
+        let mut prog = progress.lock().await;
+        prog.current_stage = UploadStage::Scanning;
+        prog.status_message = "获取画廊信息...".to_string();
+        callback(prog.clone()).await;
+    }
+
+    // 创建从 uploader 进度到 gallery 进度的映射回调
+    let progress_mapper = {
+        let progress = progress.clone();
+        let callback = callback.clone();
+        move |upload_progress: UploadProgress| {
+            let progress = progress.clone();
+            let callback = callback.clone();
+            async move {
+                let mut prog = progress.lock().await;
+                prog.total_pages = upload_progress.total_pages;
+                prog.downloaded_pages = upload_progress.downloaded_pages;
+                prog.uploaded_pages = upload_progress.uploaded_pages;
+                prog.parsed_pages = upload_progress.parsed_pages;
+                prog.current_stage = UploadStage::Uploading;
+                prog.status_message = format!("上传中 - 已解析: {}, 已下载: {}, 已上传: {}", 
+                    upload_progress.parsed_pages, 
+                    upload_progress.downloaded_pages, 
+                    upload_progress.uploaded_pages
+                );
+                callback(prog.clone()).await;
+            }
+        }
+    };
+
+    // 调用带进度回调的上传方法
+    match uploader.try_upload_with_progress(gallery_url, check, Some(progress_mapper)).await {
+        Ok(_) => {
+            let mut prog = progress.lock().await;
+            prog.current_stage = UploadStage::Complete;
+            prog.status_message = "上传完成".to_string();
+            callback(prog.clone()).await;
+            Ok(())
+        }
+        Err(e) => {
+            let mut prog = progress.lock().await;
+            prog.current_stage = UploadStage::Failed(e.to_string());
+            prog.status_message = format!("上传失败: {}", e);
+            callback(prog.clone()).await;
+            Err(e)
+        }
+    }
+}
+
+// 原来的带进度跟踪的上传函数（保留作为备用）
 async fn upload_with_progress<F, Fut>(
     uploader: &ExloliUploader, 
     gallery_url: &EhGalleryUrl, 
