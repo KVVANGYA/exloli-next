@@ -2,6 +2,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{warn, debug};
 use teloxide::Bot;
+use teloxide::prelude::Requester;
 use teloxide::types::{ChatId, MessageId};
 use std::sync::Arc;
 use tokio::sync::Mutex;
