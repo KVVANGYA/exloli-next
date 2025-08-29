@@ -38,7 +38,7 @@ use tokio::fs;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
-use crate::config::{Backup as BackupConfig, Config};
+use crate::config::Backup as BackupConfig;
 use crate::bot::Bot;
 
 pub struct BackupService {
@@ -178,7 +178,7 @@ impl BackupService {
 
     /// 创建目录备份
     async fn create_directory_backup(&self, source_dir: &Path, backup_path: &Path, compress: bool) -> Result<()> {
-        use std::process::Command;
+        use tokio::process::Command;
         
         let format_desc = if compress { "tar.gz 压缩" } else { "tar 未压缩" };
         info!("创建目录备份 ({}): {} -> {}", format_desc, source_dir.display(), backup_path.display());
@@ -207,6 +207,7 @@ impl BackupService {
         let output = Command::new("tar")
             .args(tar_args)
             .output()
+            .await
             .context("执行 tar 命令失败")?;
 
         // 检查命令执行结果，但允许某些警告
@@ -271,10 +272,11 @@ impl BackupService {
         // 尝试使用sqlite3命令创建数据库备份
         let backup_path = dir_path.join("db.sqlite.backup");
         
-        let output = std::process::Command::new("sqlite3")
+        let output = tokio::process::Command::new("sqlite3")
             .arg(&db_path)
             .arg(&format!(".backup {}", backup_path.display()))
-            .output();
+            .output()
+            .await;
 
         match output {
             Ok(result) if result.status.success() => {
@@ -301,7 +303,7 @@ impl BackupService {
 }
 
 /// 启动备份服务的辅助函数
-pub async fn start_backup_service(config: &Config, bot: Bot) -> Result<()> {
+pub async fn start_backup_service(config: &crate::config::Config, bot: Bot) -> Result<()> {
     if !config.backup.enabled {
         return Ok(());
     }

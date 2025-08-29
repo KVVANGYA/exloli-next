@@ -4,7 +4,7 @@ use reqwest::Url;
 use teloxide::dispatching::DpHandlerDescription;
 use teloxide::dptree::case;
 use teloxide::prelude::*;
-use teloxide::types::{InputFile, MessageId};
+use teloxide::types::InputFile;
 use teloxide::utils::command::BotCommands;
 use teloxide::utils::html::escape;
 use tracing::info;
