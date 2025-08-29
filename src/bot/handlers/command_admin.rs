@@ -5,7 +5,6 @@ use teloxide::prelude::*;
 use teloxide::types::MessageId;
 use tracing::info;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::bot::command::AdminCommand;
@@ -14,7 +13,7 @@ use crate::bot::{Bot, ThrottledEditor};
 use crate::database::{GalleryEntity, MessageEntity};
 use crate::ehentai::EhGalleryUrl;
 use crate::uploader::{ExloliUploader, UploadProgress};
-use crate::backup::BackupService;
+
 use crate::config::Config;
 use crate::{reply_to, try_with_reply};
 
@@ -449,7 +448,7 @@ fn create_page_progress_bar(current: usize, total: usize) -> String {
 async fn cmd_backup(bot: Bot, msg: Message, config: Config) -> Result<()> {
     info!("{}: /backup", msg.from().unwrap().id);
     
-    let backup_service = BackupService::new(
+    let backup_service = crate::backup::BackupService::new(
         config.backup.clone(),
         bot.clone(),
         config.database_url.clone(),
