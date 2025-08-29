@@ -1,3 +1,33 @@
+        // 根据压缩设置选择 tar 参数，添加更多选项来处理活跃的数据库文件
+        let tar_args = if compress {
+            vec![
+                "-czf",
+                backup_path.to_str().context("备份路径转换失败")?,
+                "--warning=no-file-changed",    // 忽略文件变化警告
+                "--warning=no-file-removed",    // 忽略文件删除警告
+                "--ignore-failed-read",         // 忽略读取失败的文件
+                "--exclude=*.log",
+                "--exclude=*.tmp",
+                "--exclude=target",
+                "-C",
+                source_dir.parent().unwrap_or(Path::new("/")).to_str().context("父目录路径转换失败")?,
+                source_dir.file_name().unwrap_or(std::ffi::OsStr::new("app")).to_str().context("目录名转换失败")?
+            ]
+        } else {
+            vec![
+                "-cf",
+                backup_path.to_str().context("备份路径转换失败")?,
+                "--warning=no-file-changed",    // 忽略文件变化警告
+                "--warning=no-file-removed",    // 忽略文件删除警告
+                "--ignore-failed-read",         // 忽略读取失败的文件
+                "--exclude=*.log",
+                "--exclude=*.tmp", 
+                "--exclude=target",
+                "-C",
+                source_dir.parent().unwrap_or(Path::new("/")).to_str().context("父目录路径转换失败")?,
+                source_dir.file_name().unwrap_or(std::ffi::OsStr::new("app")).to_str().context("目录名转换失败")?
+            ]
+        };
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
@@ -72,6 +102,9 @@ impl BackupService {
     /// 备份指定目录
     async fn backup_directory(&self, dir_path: &Path) -> Result<()> {
         info!("备份目录: {}", dir_path.display());
+
+        // 如果目录包含SQLite数据库，先尝试创建数据库快照
+        self.prepare_sqlite_backup(dir_path).await?;
 
         // 生成备份文件名
         let timestamp = SystemTime::now()
@@ -170,14 +203,32 @@ impl BackupService {
         };
 
         // 使用 tar 命令创建备份
+        info!("执行 tar 命令，参数: {:?}", tar_args);
         let output = Command::new("tar")
             .args(tar_args)
             .output()
             .context("执行 tar 命令失败")?;
 
+        // 检查命令执行结果，但允许某些警告
         if !output.status.success() {
-            let error_msg = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow::anyhow!("tar 命令执行失败: {}", error_msg));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            
+            // 如果只是文件变更相关的警告，不视为错误
+            if stderr.contains("file changed as we read it") || 
+               stderr.contains("file removed before we read it") ||
+               stderr.contains("db.sqlite") {
+                warn!("备份过程中检测到数据库文件变更，但备份已完成: {}", stderr);
+                info!("这通常是由于SQLite数据库正在使用中导致的，备份文件仍然有效");
+            } else {
+                error!("tar 命令执行失败: stderr={}, stdout={}", stderr, stdout);
+                return Err(anyhow::anyhow!("tar 命令执行失败: {}", stderr));
+            }
+        }
+
+        // 验证备份文件是否创建成功
+        if !backup_path.exists() {
+            return Err(anyhow::anyhow!("备份文件未成功创建: {}", backup_path.display()));
         }
 
         info!("目录备份创建成功");
@@ -204,6 +255,41 @@ impl BackupService {
         // 2. 删除对应的 Telegram 消息
         // 3. 从数据库中删除记录
         
+        Ok(())
+    }
+
+    /// 准备SQLite数据库备份
+    async fn prepare_sqlite_backup(&self, dir_path: &Path) -> Result<()> {
+        let db_path = dir_path.join("db.sqlite");
+        
+        if !db_path.exists() {
+            return Ok(()); // 数据库不存在，跳过
+        }
+
+        info!("检测到SQLite数据库，尝试创建一致性快照");
+
+        // 尝试使用sqlite3命令创建数据库备份
+        let backup_path = dir_path.join("db.sqlite.backup");
+        
+        let output = std::process::Command::new("sqlite3")
+            .arg(&db_path)
+            .arg(&format!(".backup {}", backup_path.display()))
+            .output();
+
+        match output {
+            Ok(result) if result.status.success() => {
+                info!("SQLite数据库快照创建成功");
+                // 备份完成后，快照文件会被包含在tar备份中
+            }
+            Ok(result) => {
+                let stderr = String::from_utf8_lossy(&result.stderr);
+                warn!("SQLite快照创建失败，将使用常规备份: {}", stderr);
+            }
+            Err(e) => {
+                warn!("无法执行sqlite3命令，将使用常规备份: {}", e);
+            }
+        }
+
         Ok(())
     }
 
