@@ -9,6 +9,7 @@ use tokio::time::sleep;
 use tracing::{error, info, warn};
 
 use crate::config::{Backup as BackupConfig, Config};
+use crate::bot::Bot;
 
 pub struct BackupService {
     config: BackupConfig,
