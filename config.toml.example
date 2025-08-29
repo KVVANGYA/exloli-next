@@ -59,6 +59,8 @@ enable_retention = false
 # 备份文件保留天数（仅在 enable_retention = true 时生效）
 retention_days = 7
 # 是否压缩备份文件
+# true: 使用 tar.gz 格式（压缩）
+# false: 使用 tar 格式（仅打包，不压缩）
 compress = true
 # 备份文件前缀
 file_prefix = "exloli_backup"

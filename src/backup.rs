@@ -55,13 +55,23 @@ impl BackupService {
 
     /// 执行备份操作
     pub async fn perform_backup(&self) -> Result<()> {
-        info!("开始执行数据库备份");
+        info!("开始执行应用程序完整备份");
 
-        // 检查数据库文件是否存在
-        if !Path::new(&self.database_path).exists() {
-            warn!("数据库文件不存在: {}", self.database_path);
-            return Ok(());
+        // 检查 /app 目录是否存在
+        let app_dir = Path::new("/app");
+        if !app_dir.exists() {
+            warn!("/app 目录不存在，尝试备份当前工作目录");
+            // 如果 /app 不存在，使用当前工作目录
+            let current_dir = std::env::current_dir()?;
+            return self.backup_directory(&current_dir).await;
         }
+
+        self.backup_directory(app_dir).await
+    }
+
+    /// 备份指定目录
+    async fn backup_directory(&self, dir_path: &Path) -> Result<()> {
+        info!("备份目录: {}", dir_path.display());
 
         // 生成备份文件名
         let timestamp = SystemTime::now()
@@ -71,31 +81,41 @@ impl BackupService {
             .context("无效的时间戳")?;
         
         let backup_filename = if self.config.compress {
-            format!("{}_{}.db.gz", self.config.file_prefix, datetime.format("%Y%m%d_%H%M%S"))
+            format!(
+                "{}_{}.tar.gz", 
+                self.config.file_prefix, 
+                datetime.format("%Y%m%d_%H%M%S")
+            )
         } else {
-            format!("{}_{}.db", self.config.file_prefix, datetime.format("%Y%m%d_%H%M%S"))
+            format!(
+                "{}_{}.tar", 
+                self.config.file_prefix, 
+                datetime.format("%Y%m%d_%H%M%S")
+            )
         };
 
         let backup_path = PathBuf::from(&backup_filename);
 
-        // 创建备份文件
-        if self.config.compress {
-            self.create_compressed_backup(&backup_path).await?;
-        } else {
-            fs::copy(&self.database_path, &backup_path).await
-                .context("复制数据库文件失败")?;
-        }
+        // 创建目录备份
+        self.create_directory_backup(dir_path, &backup_path, self.config.compress).await?;
 
         // 获取文件大小
         let file_size = fs::metadata(&backup_path).await?.len();
         let size_mb = file_size as f64 / 1024.0 / 1024.0;
 
         // 发送备份文件到指定频道
+        let format_info = if self.config.compress {
+            "tar.gz 压缩包"
+        } else {
+            "tar 未压缩包"
+        };
+        
         let caption = format!(
-            "🗄️ **数据库备份**\n\n📅 备份时间: {}\n📦 文件大小: {:.2} MB\n🔧 压缩: {}",
+            "🗄️ **应用程序完整备份**\n\n📅 备份时间: {}\n📦 文件大小: {:.2} MB\n📁 备份内容: {} 目录完整备份\n🔧 格式: {}",
             datetime.format("%Y-%m-%d %H:%M:%S UTC"),
             size_mb,
-            if self.config.compress { "是" } else { "否" }
+            dir_path.display(),
+            format_info
         );
 
         let input_file = InputFile::file(&backup_path);
@@ -123,24 +143,44 @@ impl BackupService {
         Ok(())
     }
 
-    /// 创建压缩备份
-    async fn create_compressed_backup(&self, backup_path: &Path) -> Result<()> {
-        use std::io::prelude::*;
-        use flate2::Compression;
-        use flate2::write::GzEncoder;
+    /// 创建目录备份
+    async fn create_directory_backup(&self, source_dir: &Path, backup_path: &Path, compress: bool) -> Result<()> {
+        use std::process::Command;
+        
+        let format_desc = if compress { "tar.gz 压缩" } else { "tar 未压缩" };
+        info!("创建目录备份 ({}): {} -> {}", format_desc, source_dir.display(), backup_path.display());
 
-        let input_data = fs::read(&self.database_path).await
-            .context("读取数据库文件失败")?;
+        // 根据压缩设置选择 tar 参数
+        let tar_args = if compress {
+            vec![
+                "-czf",
+                backup_path.to_str().context("备份路径转换失败")?,
+                "-C",
+                source_dir.parent().unwrap_or(Path::new("/")).to_str().context("父目录路径转换失败")?,
+                source_dir.file_name().unwrap_or(std::ffi::OsStr::new("app")).to_str().context("目录名转换失败")?
+            ]
+        } else {
+            vec![
+                "-cf",
+                backup_path.to_str().context("备份路径转换失败")?,
+                "-C",
+                source_dir.parent().unwrap_or(Path::new("/")).to_str().context("父目录路径转换失败")?,
+                source_dir.file_name().unwrap_or(std::ffi::OsStr::new("app")).to_str().context("目录名转换失败")?
+            ]
+        };
 
-        let output_file = std::fs::File::create(backup_path)
-            .context("创建备份文件失败")?;
+        // 使用 tar 命令创建备份
+        let output = Command::new("tar")
+            .args(tar_args)
+            .output()
+            .context("执行 tar 命令失败")?;
 
-        let mut encoder = GzEncoder::new(output_file, Compression::default());
-        encoder.write_all(&input_data)
-            .context("压缩数据失败")?;
-        encoder.finish()
-            .context("完成压缩失败")?;
+        if !output.status.success() {
+            let error_msg = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("tar 命令执行失败: {}", error_msg));
+        }
 
+        info!("目录备份创建成功");
         Ok(())
     }
 
