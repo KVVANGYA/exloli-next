@@ -23,6 +23,8 @@ pub struct Config {
     pub interval: Duration,
     /// Sqlite 数据库位置
     pub database_url: String,
+    /// 代理设置
+    pub proxy: Option<String>,
     pub exhentai: ExHentai,
     pub telegraph: Telegraph,
     pub telegram: Telegram,
@@ -65,6 +67,8 @@ pub struct Telegram {
     pub group_id: ChatId,
     /// 入口讨论组 ID
     pub auth_group_id: ChatId,
+    /// 受信任的用户列表
+    pub trusted_users: Vec<String>,
     /// 是否允许非管理员使用公共命令
     #[serde(default = "default_allow_public_commands")]
     pub allow_public_commands: bool,
