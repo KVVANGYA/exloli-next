@@ -234,9 +234,24 @@ impl BackupService {
             .context("执行 tar 命令失败")?;
 
         // 检查命令执行结果，但允许某些警告
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let exit_code = output.status.code().unwrap_or(-1);
+        
+        info!("tar 命令执行结果: 退出码={}, stderr长度={}, stdout长度={}", 
+              exit_code, stderr.len(), stdout.len());
+        
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
+            // 如果 stderr 和 stdout 都为空，可能是命令没有正确执行
+            if stderr.is_empty() && stdout.is_empty() {
+                error!("tar 命令执行失败，无输出信息。退出码: {}", exit_code);
+                error!("这可能是因为:");
+                error!("1. tar 命令不存在或无法执行");
+                error!("2. 权限不足");
+                error!("3. 路径参数有误");
+                error!("命令参数: {:?}", tar_command);
+                return Err(anyhow::anyhow!("tar 命令执行失败，退出码: {}", exit_code));
+            }
             
             // 如果只是文件变更相关的警告，不视为错误
             if stderr.contains("file changed as we read it") || 
