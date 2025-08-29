@@ -153,41 +153,82 @@ impl BackupService {
         let format_desc = if compress { "tar.gz 压缩" } else { "tar 未压缩" };
         info!("创建目录备份 ({}): {} -> {}", format_desc, source_dir.display(), backup_path.display());
 
-        // 根据压缩设置选择 tar 参数，添加更多选项来处理活跃的数据库文件
-        let tar_args = if compress {
-            vec![
-                "-czf",
-                backup_path.to_str().context("备份路径转换失败")?,
-                "--warning=no-file-changed",    // 忽略文件变化警告
-                "--warning=no-file-removed",    // 忽略文件删除警告
-                "--ignore-failed-read",         // 忽略读取失败的文件
-                "--exclude=*.log",
-                "--exclude=*.tmp",
-                "--exclude=target",
-                "-C",
-                source_dir.parent().unwrap_or(Path::new("/")).to_str().context("父目录路径转换失败")?,
-                source_dir.file_name().unwrap_or(std::ffi::OsStr::new("app")).to_str().context("目录名转换失败")?
-            ]
+        // Windows 和 Unix 系统使用不同的 tar 命令参数
+        let tar_command = if cfg!(target_os = "windows") {
+            // Windows 上的 tar 命令可能不支持某些 GNU tar 选项
+            if compress {
+                vec![
+                    "-czf",
+                    backup_path.to_str().context("备份路径转换失败")?,
+                    "--exclude=*.log",
+                    "--exclude=*.tmp",
+                    "--exclude=target",
+                    "-C",
+                    source_dir.parent().unwrap_or(Path::new(".")).to_str().context("父目录路径转换失败")?,
+                    source_dir.file_name().unwrap_or(std::ffi::OsStr::new("app")).to_str().context("目录名转换失败")?
+                ]
+            } else {
+                vec![
+                    "-cf",
+                    backup_path.to_str().context("备份路径转换失败")?,
+                    "--exclude=*.log",
+                    "--exclude=*.tmp", 
+                    "--exclude=target",
+                    "-C",
+                    source_dir.parent().unwrap_or(Path::new(".")).to_str().context("父目录路径转换失败")?,
+                    source_dir.file_name().unwrap_or(std::ffi::OsStr::new("app")).to_str().context("目录名转换失败")?
+                ]
+            }
         } else {
-            vec![
-                "-cf",
-                backup_path.to_str().context("备份路径转换失败")?,
-                "--warning=no-file-changed",    // 忽略文件变化警告
-                "--warning=no-file-removed",    // 忽略文件删除警告
-                "--ignore-failed-read",         // 忽略读取失败的文件
-                "--exclude=*.log",
-                "--exclude=*.tmp", 
-                "--exclude=target",
-                "-C",
-                source_dir.parent().unwrap_or(Path::new("/")).to_str().context("父目录路径转换失败")?,
-                source_dir.file_name().unwrap_or(std::ffi::OsStr::new("app")).to_str().context("目录名转换失败")?
-            ]
+            // Unix 系统使用完整的 GNU tar 选项
+            if compress {
+                vec![
+                    "-czf",
+                    backup_path.to_str().context("备份路径转换失败")?,
+                    "--warning=no-file-changed",
+                    "--warning=no-file-removed",
+                    "--ignore-failed-read",
+                    "--exclude=*.log",
+                    "--exclude=*.tmp",
+                    "--exclude=target",
+                    "-C",
+                    source_dir.parent().unwrap_or(Path::new("/")).to_str().context("父目录路径转换失败")?,
+                    source_dir.file_name().unwrap_or(std::ffi::OsStr::new("app")).to_str().context("目录名转换失败")?
+                ]
+            } else {
+                vec![
+                    "-cf",
+                    backup_path.to_str().context("备份路径转换失败")?,
+                    "--warning=no-file-changed",
+                    "--warning=no-file-removed",
+                    "--ignore-failed-read",
+                    "--exclude=*.log",
+                    "--exclude=*.tmp", 
+                    "--exclude=target",
+                    "-C",
+                    source_dir.parent().unwrap_or(Path::new("/")).to_str().context("父目录路径转换失败")?,
+                    source_dir.file_name().unwrap_or(std::ffi::OsStr::new("app")).to_str().context("目录名转换失败")?
+                ]
+            }
         };
 
+        // 首先检查 tar 命令是否可用
+        let tar_available = Command::new("tar")
+            .arg("--version")
+            .output()
+            .await
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+
+        if !tar_available {
+            error!("tar 命令不可用，请安装 tar 工具或在 Docker 容器中运行");
+            return Err(anyhow::anyhow!("tar 命令不可用，无法创建备份"));
+        }
+
         // 使用 tar 命令创建备份
-        info!("执行 tar 命令，参数: {:?}", tar_args);
+        info!("执行 tar 命令，参数: {:?}", tar_command);
         let output = Command::new("tar")
-            .args(tar_args)
+            .args(tar_command)
             .output()
             .await
             .context("执行 tar 命令失败")?;
