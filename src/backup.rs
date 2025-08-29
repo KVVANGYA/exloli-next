@@ -257,15 +257,25 @@ impl BackupService {
                 return Err(anyhow::anyhow!("tar 命令执行失败，退出码: {}", exit_code));
             }
             
-            // 如果只是文件变更相关的警告，不视为错误
+            // 如果只是文件变更相关的警告或tar的常见警告，不视为错误
             if stderr.contains("file changed as we read it") || 
                stderr.contains("file removed before we read it") ||
-               stderr.contains("db.sqlite") {
-                warn!("备份过程中检测到数据库文件变更，但备份已完成: {}", stderr);
-                info!("这通常是由于SQLite数据库正在使用中导致的，备份文件仍然有效");
+               stderr.contains("db.sqlite") ||
+               stderr.contains("Removing leading") {
+                warn!("备份过程中检测到警告，但备份已完成: {}", stderr);
+                if stderr.contains("Removing leading") {
+                    info!("tar 正在移除路径前缀以创建相对路径，这是正常行为");
+                } else {
+                    info!("这通常是由于SQLite数据库正在使用中导致的，备份文件仍然有效");
+                }
             } else {
                 error!("tar 命令执行失败: stderr={}, stdout={}", stderr, stdout);
                 return Err(anyhow::anyhow!("tar 命令执行失败: {}", stderr));
+            }
+        } else {
+            // 即使成功也要检查是否有警告信息
+            if !stderr.is_empty() && stderr.contains("Removing leading") {
+                info!("tar 成功完成，警告信息: {}", stderr);
             }
         }
 
@@ -349,10 +359,20 @@ impl BackupService {
 
     /// 发送错误通知到 Telegram
     async fn send_error_notification(&self, error_message: &str) {
+        // 转义特殊字符以避免 Markdown 解析错误
+        let escaped_error = error_message
+            .replace("*", "\\*")
+            .replace("_", "\\_")
+            .replace("[", "\\[")
+            .replace("]", "\\]")
+            .replace("(", "\\(")
+            .replace(")", "\\)")
+            .replace("`", "\\`");
+            
         let notification = format!(
             "❌ **备份错误通知**\n\n🕒 时间: {}\n📋 错误信息: {}\n\n🔧 请检查系统日志获取详细信息",
             chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
-            error_message
+            escaped_error
         );
 
         if let Err(e) = self.bot
@@ -361,6 +381,18 @@ impl BackupService {
             .await
         {
             error!("发送错误通知失败: {}", e);
+            // 如果 Markdown 失败，尝试发送纯文本
+            let plain_notification = format!(
+                "备份错误通知\n\n时间: {}\n错误信息: {}\n\n请检查系统日志获取详细信息",
+                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+                error_message
+            );
+            if let Err(e) = self.bot
+                .send_message(self.config.target_chat_id, &plain_notification)
+                .await
+            {
+                error!("发送纯文本错误通知也失败: {}", e);
+            }
         }
     }
 }
