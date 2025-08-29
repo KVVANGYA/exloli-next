@@ -41,9 +41,11 @@ impl BackupService {
                 error!("备份失败: {}", e);
             }
             
-            // 清理过期备份文件
-            if let Err(e) = self.cleanup_old_backups().await {
-                error!("清理过期备份失败: {}", e);
+            // 清理过期备份文件（如果启用）
+            if self.config.enable_retention {
+                if let Err(e) = self.cleanup_old_backups().await {
+                    error!("清理过期备份失败: {}", e);
+                }
             }
             
             sleep(interval).await;
@@ -143,11 +145,24 @@ impl BackupService {
 
     /// 清理过期的备份文件（从频道中删除）
     async fn cleanup_old_backups(&self) -> Result<()> {
+        if !self.config.enable_retention {
+            return Ok(());
+        }
+
         // 注意：Telegram Bot API 不支持直接列出频道中的文件
         // 这里只是一个占位符实现，实际中可能需要维护一个备份记录数据库
         // 或者通过其他方式跟踪已发送的备份文件
         
-        info!("清理过期备份功能需要额外的实现来跟踪已发送的消息");
+        info!(
+            "清理过期备份功能已启用，保留天数: {} 天。需要额外的实现来跟踪已发送的消息",
+            self.config.retention_days
+        );
+        
+        // TODO: 实现实际的清理逻辑
+        // 1. 查询数据库中超过 retention_days 天的备份记录
+        // 2. 删除对应的 Telegram 消息
+        // 3. 从数据库中删除记录
+        
         Ok(())
     }
 

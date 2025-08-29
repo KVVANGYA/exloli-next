@@ -54,7 +54,9 @@ enabled = true
 interval_hours = 24
 # 备份目标频道/群组ID（可以是私有频道或群组）
 target_chat_id = -1001234567890
-# 备份文件保留天数
+# 是否启用文件保留天数功能
+enable_retention = false
+# 备份文件保留天数（仅在 enable_retention = true 时生效）
 retention_days = 7
 # 是否压缩备份文件
 compress = true

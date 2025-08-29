@@ -102,7 +102,9 @@ pub struct Backup {
     pub interval_hours: u64,
     /// 备份目标频道/群组ID
     pub target_chat_id: ChatId,
-    /// 备份文件保留天数
+    /// 是否启用文件保留天数功能
+    pub enable_retention: bool,
+    /// 备份文件保留天数（仅在 enable_retention = true 时生效）
     pub retention_days: u32,
     /// 是否压缩备份文件
     pub compress: bool,

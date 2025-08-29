@@ -16,13 +16,23 @@ enabled = true
 interval_hours = 24
 # 备份目标频道/群组ID（可以是私有频道或群组）
 target_chat_id = -1001234567890
-# 备份文件保留天数（注意：目前仅作为配置保留，实际清理功能需要手动实现）
+# 是否启用文件保留天数功能
+enable_retention = false
+# 备份文件保留天数（仅在 enable_retention = true 时生效）
 retention_days = 7
 # 是否压缩备份文件
 compress = true
 # 备份文件前缀
 file_prefix = "exloli_backup"
 ```
+=======
+
+### 文件保留功能说明
+
+- **禁用保留功能** (`enable_retention = false`): 备份文件会一直保留在目标频道中，需要手动管理
+- **启用保留功能** (`enable_retention = true`): 系统会尝试自动清理超过指定天数的备份文件
+
+> **注意**: 自动清理功能需要额外的数据库表来跟踪已发送的备份消息，当前版本仅提供配置选项和框架代码。
 
 ### 配置参数详解
 
@@ -32,7 +42,10 @@ file_prefix = "exloli_backup"
   - 可以是私有频道（推荐）
   - 也可以是群组
   - 确保 bot 有发送文档的权限
-- **retention_days**: 备份文件保留天数（当前版本仅作配置保留）
+- **enable_retention**: 是否启用文件保留天数功能
+  - `true`: 启用自动清理过期备份文件功能
+  - `false`: 禁用自动清理，备份文件会一直保留
+- **retention_days**: 备份文件保留天数（仅在 enable_retention = true 时生效）
 - **compress**: 是否压缩备份文件
   - `true`: 使用 gzip 压缩，文件更小但需要解压
   - `false`: 直接备份原始数据库文件
