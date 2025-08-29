@@ -115,23 +115,23 @@ impl BackupService {
         };
         
         let caption = format!(
-            "🗄️ **应用程序完整备份**
+            "🗄️ *应用程序完整备份*
 
 📅 备份时间: {}
 📦 文件大小: {:.2} MB
 📁 备份内容: {} 目录完整备份
 🔧 格式: {}",
-            datetime.format("%Y-%m-%d %H:%M:%S UTC"),
+            datetime.format("%Y\\--%m\\--%d %H:%M:%S UTC").to_string().replace("-", "\\-"),
             size_mb,
-            dir_path.display(),
-            format_info
+            dir_path.display().to_string().replace("-", "\\-").replace(".", "\\."),
+            format_info.replace(".", "\\.")
         );
 
         let input_file = InputFile::file(&backup_path);
         
         match self.bot.send_document(self.config.target_chat_id, input_file)
             .caption(&caption)
-            .parse_mode(ParseMode::Markdown)
+            .parse_mode(ParseMode::MarkdownV2)
             .await
         {
             Ok(_) => {
@@ -364,25 +364,38 @@ impl BackupService {
 
     /// 发送错误通知到 Telegram
     async fn send_error_notification(&self, error_message: &str) {
-        // 转义特殊字符以避免 Markdown 解析错误
+        // 转义特殊字符以避免 MarkdownV2 解析错误
         let escaped_error = error_message
+            .replace("\\", "\\\\")
             .replace("*", "\\*")
             .replace("_", "\\_")
             .replace("[", "\\[")
             .replace("]", "\\]")
             .replace("(", "\\(")
             .replace(")", "\\)")
-            .replace("`", "\\`");
+            .replace("`", "\\`")
+            .replace(".", "\\.")
+            .replace("-", "\\-")
+            .replace("!", "\\!")
+            .replace("+", "\\+")
+            .replace("=", "\\=")
+            .replace("{", "\\{")
+            .replace("}", "\\}");
             
         let notification = format!(
-            "❌ **备份错误通知**\n\n🕒 时间: {}\n📋 错误信息: {}\n\n🔧 请检查系统日志获取详细信息",
-            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+            "❌ *备份错误通知*
+
+🕒 时间: {}
+📋 错误信息: {}
+
+🔧 请检查系统日志获取详细信息",
+            chrono::Utc::now().format("%Y\\--%m\\--%d %H:%M:%S UTC").to_string().replace("-", "\\-"),
             escaped_error
         );
 
         if let Err(e) = self.bot
             .send_message(self.config.target_chat_id, &notification)
-            .parse_mode(ParseMode::Markdown)
+            .parse_mode(ParseMode::MarkdownV2)
             .await
         {
             error!("发送错误通知失败: {}", e);
