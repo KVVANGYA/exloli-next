@@ -40,6 +40,7 @@ impl BackupService {
         loop {
             if let Err(e) = self.perform_backup().await {
                 error!("备份失败: {}", e);
+                self.send_error_notification(&format!("备份失败: {}", e)).await;
             }
             
             // 清理过期备份文件（如果启用）
@@ -163,6 +164,8 @@ impl BackupService {
                     "--exclude=*.log",
                     "--exclude=*.tmp",
                     "--exclude=target",
+                    "--exclude=exloli_backup_*.tar.gz",
+                    "--exclude=exloli_backup_*.tar",
                     "-C",
                     source_dir.parent().unwrap_or(Path::new(".")).to_str().context("父目录路径转换失败")?,
                     source_dir.file_name().unwrap_or(std::ffi::OsStr::new("app")).to_str().context("目录名转换失败")?
@@ -174,6 +177,8 @@ impl BackupService {
                     "--exclude=*.log",
                     "--exclude=*.tmp", 
                     "--exclude=target",
+                    "--exclude=exloli_backup_*.tar.gz",
+                    "--exclude=exloli_backup_*.tar",
                     "-C",
                     source_dir.parent().unwrap_or(Path::new(".")).to_str().context("父目录路径转换失败")?,
                     source_dir.file_name().unwrap_or(std::ffi::OsStr::new("app")).to_str().context("目录名转换失败")?
@@ -191,6 +196,8 @@ impl BackupService {
                     "--exclude=*.log",
                     "--exclude=*.tmp",
                     "--exclude=target",
+                    "--exclude=exloli_backup_*.tar.gz",
+                    "--exclude=exloli_backup_*.tar",
                     "-C",
                     source_dir.parent().unwrap_or(Path::new("/")).to_str().context("父目录路径转换失败")?,
                     source_dir.file_name().unwrap_or(std::ffi::OsStr::new("app")).to_str().context("目录名转换失败")?
@@ -205,6 +212,8 @@ impl BackupService {
                     "--exclude=*.log",
                     "--exclude=*.tmp", 
                     "--exclude=target",
+                    "--exclude=exloli_backup_*.tar.gz",
+                    "--exclude=exloli_backup_*.tar",
                     "-C",
                     source_dir.parent().unwrap_or(Path::new("/")).to_str().context("父目录路径转换失败")?,
                     source_dir.file_name().unwrap_or(std::ffi::OsStr::new("app")).to_str().context("目录名转换失败")?
@@ -227,6 +236,7 @@ impl BackupService {
 
         // 使用 tar 命令创建备份
         info!("执行 tar 命令，参数: {:?}", tar_command);
+        let tar_command_clone = tar_command.clone();
         let output = Command::new("tar")
             .args(tar_command)
             .output()
@@ -249,7 +259,7 @@ impl BackupService {
                 error!("1. tar 命令不存在或无法执行");
                 error!("2. 权限不足");
                 error!("3. 路径参数有误");
-                error!("命令参数: {:?}", tar_command);
+                error!("命令参数: {:?}", tar_command_clone);
                 return Err(anyhow::anyhow!("tar 命令执行失败，退出码: {}", exit_code));
             }
             
@@ -335,8 +345,29 @@ impl BackupService {
 
     /// 手动触发备份
     pub async fn manual_backup(&self) -> Result<String> {
-        self.perform_backup().await?;
+        if let Err(e) = self.perform_backup().await {
+            let error_msg = format!("手动备份失败: {}", e);
+            self.send_error_notification(&error_msg).await;
+            return Err(e);
+        }
         Ok("手动备份已完成".to_string())
+    }
+
+    /// 发送错误通知到 Telegram
+    async fn send_error_notification(&self, error_message: &str) {
+        let notification = format!(
+            "❌ **备份错误通知**\n\n🕒 时间: {}\n📋 错误信息: {}\n\n🔧 请检查系统日志获取详细信息",
+            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+            error_message
+        );
+
+        if let Err(e) = self.bot
+            .send_message(self.config.target_chat_id, &notification)
+            .parse_mode(ParseMode::Markdown)
+            .await
+        {
+            error!("发送错误通知失败: {}", e);
+        }
     }
 }
 
