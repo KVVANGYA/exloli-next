@@ -17,6 +17,8 @@ pub enum AdminCommand {
     ReUpload,
     #[command(description = "检测并补档 80 分以上或最近两个月的本子的预览")]
     ReCheck,
+    #[command(description = "手动备份数据库")]
+    Backup,
 }
 
 #[derive(BotCommands, Clone, PartialEq, Debug)]

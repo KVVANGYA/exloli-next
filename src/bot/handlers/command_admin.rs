@@ -14,6 +14,8 @@ use crate::bot::{Bot, ThrottledEditor};
 use crate::database::{GalleryEntity, MessageEntity};
 use crate::ehentai::EhGalleryUrl;
 use crate::uploader::{ExloliUploader, UploadProgress};
+use crate::backup::BackupService;
+use crate::config::Config;
 use crate::{reply_to, try_with_reply};
 
 #[derive(Clone)]
@@ -48,6 +50,7 @@ pub fn admin_command_handler() -> Handler<'static, DependencyMap, Result<()>, Dp
         .branch(case![AdminCommand::Erase].endpoint(cmd_delete))
         .branch(case![AdminCommand::ReCheck].endpoint(cmd_recheck))
         .branch(case![AdminCommand::ReUpload].endpoint(cmd_reupload))
+        .branch(case![AdminCommand::Backup].endpoint(cmd_backup))
 }
 
 // TODO: 该功能需要移除
@@ -441,6 +444,27 @@ fn create_page_progress_bar(current: usize, total: usize) -> String {
     let percentage = (current * 100) / total.max(1);
     
     format!("[{}{}] {}% ({}/{})", filled, empty, percentage, current, total)
+}
+
+async fn cmd_backup(bot: Bot, msg: Message, config: Config) -> Result<()> {
+    info!("{}: /backup", msg.from().unwrap().id);
+    
+    let backup_service = BackupService::new(
+        config.backup.clone(),
+        bot.clone(),
+        config.database_url.clone(),
+    );
+    
+    match backup_service.manual_backup().await {
+        Ok(result) => {
+            reply_to!(bot, msg, format!("✅ {}", result)).await?;
+        }
+        Err(e) => {
+            reply_to!(bot, msg, format!("❌ 备份失败: {}", e)).await?;
+        }
+    }
+    
+    Ok(())
 }
 
 async fn cmd_delete(bot: Bot, msg: Message, command: AdminCommand) -> Result<()> {

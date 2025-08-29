@@ -6,6 +6,7 @@ use exloli_next::config::{Config, CHANNEL_ID};
 use exloli_next::ehentai::EhClient;
 use exloli_next::tags::EhTagTransDB;
 use exloli_next::uploader::ExloliUploader;
+use exloli_next::backup::start_backup_service;
 use teloxide::prelude::*;
 use teloxide::types::ParseMode;
 
@@ -31,6 +32,11 @@ async fn main() -> Result<()> {
         .cache_me();
     let uploader =
         ExloliUploader::new(config.clone(), ehentai.clone(), bot.clone(), trans.clone()).await?;
+
+    // 启动备份服务
+    if let Err(e) = start_backup_service(&config, bot.clone()).await {
+        tracing::error!("启动备份服务失败: {}", e);
+    }
 
     let t1 = {
         let uploader = uploader.clone();

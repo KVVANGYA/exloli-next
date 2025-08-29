@@ -6,3 +6,4 @@ mod s3;
 pub mod tags;
 pub mod uploader;
 pub mod utils;
+pub mod backup;

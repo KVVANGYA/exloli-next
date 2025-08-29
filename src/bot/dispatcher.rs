@@ -43,7 +43,7 @@ pub async fn start_dispatcher(
     Dispatcher::builder(bot, handler)
         .dependencies(dptree::deps![
             ehentai,
-            config,
+            config.clone(),
             rate_limiter,
             trans,
             challenge_locker,

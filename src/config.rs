@@ -28,6 +28,7 @@ pub struct Config {
     pub telegram: Telegram,
     pub s3: S3,
     pub ipfs: Ipfs,
+    pub backup: Backup,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -91,6 +92,22 @@ pub struct Ipfs {
     pub gateway_date: String,
     /// teletype.in 授权令牌
     pub teletype_token: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Backup {
+    /// 是否启用定时备份
+    pub enabled: bool,
+    /// 备份间隔（小时）
+    pub interval_hours: u64,
+    /// 备份目标频道/群组ID
+    pub target_chat_id: ChatId,
+    /// 备份文件保留天数
+    pub retention_days: u32,
+    /// 是否压缩备份文件
+    pub compress: bool,
+    /// 备份文件前缀
+    pub file_prefix: String,
 }
 
 impl Config {
