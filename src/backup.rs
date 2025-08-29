@@ -284,8 +284,8 @@ impl BackupService {
     }
 }
 
-/// 启动备份服务的辅助函数
-pub async fn start_backup_service(config: &crate::config::Config, bot: Bot) -> Result<()> {
+/// 启动备份服务的辅助函数  
+pub async fn start_backup_service(config: &crate::config::Config, bot: Bot) -> anyhow::Result<()> {
     if !config.backup.enabled {
         return Ok(());
     }
