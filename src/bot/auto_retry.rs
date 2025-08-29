@@ -4,7 +4,6 @@ use tracing::{warn, debug};
 use teloxide::Bot;
 use teloxide::prelude::Requester;
 use teloxide::types::{ChatId, MessageId};
-use std::sync::Arc;
 
 
 /// Auto-retry wrapper for Telegram Bot API calls with rate limiting handling
