@@ -1,33 +1,3 @@
-        // 根据压缩设置选择 tar 参数，添加更多选项来处理活跃的数据库文件
-        let tar_args = if compress {
-            vec![
-                "-czf",
-                backup_path.to_str().context("备份路径转换失败")?,
-                "--warning=no-file-changed",    // 忽略文件变化警告
-                "--warning=no-file-removed",    // 忽略文件删除警告
-                "--ignore-failed-read",         // 忽略读取失败的文件
-                "--exclude=*.log",
-                "--exclude=*.tmp",
-                "--exclude=target",
-                "-C",
-                source_dir.parent().unwrap_or(Path::new("/")).to_str().context("父目录路径转换失败")?,
-                source_dir.file_name().unwrap_or(std::ffi::OsStr::new("app")).to_str().context("目录名转换失败")?
-            ]
-        } else {
-            vec![
-                "-cf",
-                backup_path.to_str().context("备份路径转换失败")?,
-                "--warning=no-file-changed",    // 忽略文件变化警告
-                "--warning=no-file-removed",    // 忽略文件删除警告
-                "--ignore-failed-read",         // 忽略读取失败的文件
-                "--exclude=*.log",
-                "--exclude=*.tmp", 
-                "--exclude=target",
-                "-C",
-                source_dir.parent().unwrap_or(Path::new("/")).to_str().context("父目录路径转换失败")?,
-                source_dir.file_name().unwrap_or(std::ffi::OsStr::new("app")).to_str().context("目录名转换失败")?
-            ]
-        };
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
@@ -144,7 +114,7 @@ impl BackupService {
         };
         
         let caption = format!(
-            "🗄️ **应用程序完整备份**\n\n📅 备份时间: {}\n📦 文件大小: {:.2} MB\n📁 备份内容: {} 目录完整备份\n🔧 格式: {}",
+            "🗄️ **应用程序完整备份**\\n\\n📅 备份时间: {}\\n📦 文件大小: {:.2} MB\\n📁 备份内容: {} 目录完整备份\\n🔧 格式: {}",
             datetime.format("%Y-%m-%d %H:%M:%S UTC"),
             size_mb,
             dir_path.display(),
@@ -183,11 +153,17 @@ impl BackupService {
         let format_desc = if compress { "tar.gz 压缩" } else { "tar 未压缩" };
         info!("创建目录备份 ({}): {} -> {}", format_desc, source_dir.display(), backup_path.display());
 
-        // 根据压缩设置选择 tar 参数
+        // 根据压缩设置选择 tar 参数，添加更多选项来处理活跃的数据库文件
         let tar_args = if compress {
             vec![
                 "-czf",
                 backup_path.to_str().context("备份路径转换失败")?,
+                "--warning=no-file-changed",    // 忽略文件变化警告
+                "--warning=no-file-removed",    // 忽略文件删除警告
+                "--ignore-failed-read",         // 忽略读取失败的文件
+                "--exclude=*.log",
+                "--exclude=*.tmp",
+                "--exclude=target",
                 "-C",
                 source_dir.parent().unwrap_or(Path::new("/")).to_str().context("父目录路径转换失败")?,
                 source_dir.file_name().unwrap_or(std::ffi::OsStr::new("app")).to_str().context("目录名转换失败")?
@@ -196,6 +172,12 @@ impl BackupService {
             vec![
                 "-cf",
                 backup_path.to_str().context("备份路径转换失败")?,
+                "--warning=no-file-changed",    // 忽略文件变化警告
+                "--warning=no-file-removed",    // 忽略文件删除警告
+                "--ignore-failed-read",         // 忽略读取失败的文件
+                "--exclude=*.log",
+                "--exclude=*.tmp", 
+                "--exclude=target",
                 "-C",
                 source_dir.parent().unwrap_or(Path::new("/")).to_str().context("父目录路径转换失败")?,
                 source_dir.file_name().unwrap_or(std::ffi::OsStr::new("app")).to_str().context("目录名转换失败")?
