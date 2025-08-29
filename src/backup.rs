@@ -154,10 +154,10 @@ impl BackupService {
         let format_desc = if compress { "tar.gz 压缩" } else { "tar 未压缩" };
         info!("创建目录备份 ({}): {} -> {}", format_desc, source_dir.display(), backup_path.display());
 
-        // Windows 和 Unix 系统使用不同的 tar 命令参数
-        let tar_command = if cfg!(target_os = "windows") {
-            // Windows 上的 tar 命令可能不支持某些 GNU tar 选项
-            if compress {
+        // 简化 tar 命令参数，直接打包目录
+        let tar_command = if compress {
+            if cfg!(target_os = "windows") {
+                // Windows 上的 tar 命令使用简化参数
                 vec![
                     "-czf",
                     backup_path.to_str().context("备份路径转换失败")?,
@@ -166,43 +166,39 @@ impl BackupService {
                     "--exclude=target",
                     "--exclude=exloli_backup_*.tar.gz",
                     "--exclude=exloli_backup_*.tar",
-                    "-C",
-                    source_dir.parent().unwrap_or(Path::new(".")).to_str().context("父目录路径转换失败")?,
-                    source_dir.file_name().unwrap_or(std::ffi::OsStr::new("app")).to_str().context("目录名转换失败")?
+                    source_dir.to_str().context("源目录路径转换失败")?
                 ]
             } else {
+                // Unix 系统使用完整的 GNU tar 选项
                 vec![
-                    "-cf",
+                    "-czf",
                     backup_path.to_str().context("备份路径转换失败")?,
+                    "--warning=no-file-changed",
+                    "--warning=no-file-removed",
+                    "--ignore-failed-read",
                     "--exclude=*.log",
-                    "--exclude=*.tmp", 
+                    "--exclude=*.tmp",
                     "--exclude=target",
                     "--exclude=exloli_backup_*.tar.gz",
                     "--exclude=exloli_backup_*.tar",
-                    "-C",
-                    source_dir.parent().unwrap_or(Path::new(".")).to_str().context("父目录路径转换失败")?,
-                    source_dir.file_name().unwrap_or(std::ffi::OsStr::new("app")).to_str().context("目录名转换失败")?
+                    source_dir.to_str().context("源目录路径转换失败")?
                 ]
             }
         } else {
-            // Unix 系统使用完整的 GNU tar 选项
-            if compress {
+            if cfg!(target_os = "windows") {
+                // Windows 上的 tar 命令使用简化参数
                 vec![
-                    "-czf",
+                    "-cf",
                     backup_path.to_str().context("备份路径转换失败")?,
-                    "--warning=no-file-changed",
-                    "--warning=no-file-removed",
-                    "--ignore-failed-read",
                     "--exclude=*.log",
-                    "--exclude=*.tmp",
+                    "--exclude=*.tmp", 
                     "--exclude=target",
                     "--exclude=exloli_backup_*.tar.gz",
                     "--exclude=exloli_backup_*.tar",
-                    "-C",
-                    source_dir.parent().unwrap_or(Path::new("/")).to_str().context("父目录路径转换失败")?,
-                    source_dir.file_name().unwrap_or(std::ffi::OsStr::new("app")).to_str().context("目录名转换失败")?
+                    source_dir.to_str().context("源目录路径转换失败")?
                 ]
             } else {
+                // Unix 系统使用完整的 GNU tar 选项
                 vec![
                     "-cf",
                     backup_path.to_str().context("备份路径转换失败")?,
@@ -214,9 +210,7 @@ impl BackupService {
                     "--exclude=target",
                     "--exclude=exloli_backup_*.tar.gz",
                     "--exclude=exloli_backup_*.tar",
-                    "-C",
-                    source_dir.parent().unwrap_or(Path::new("/")).to_str().context("父目录路径转换失败")?,
-                    source_dir.file_name().unwrap_or(std::ffi::OsStr::new("app")).to_str().context("目录名转换失败")?
+                    source_dir.to_str().context("源目录路径转换失败")?
                 ]
             }
         };
