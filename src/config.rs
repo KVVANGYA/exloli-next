@@ -12,10 +12,6 @@ fn default_allow_public_commands() -> bool {
     true
 }
 
-fn default_api_timeout() -> Duration {
-    Duration::from_secs(30)
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     /// 日志等级
@@ -29,10 +25,6 @@ pub struct Config {
     pub database_url: String,
     /// 代理设置
     pub proxy: Option<String>,
-    /// API 请求超时时间
-    #[serde(default = "default_api_timeout")]
-    #[serde(deserialize_with = "deserialize_duration")]
-    pub api_timeout: Duration,
     pub exhentai: ExHentai,
     pub telegraph: Telegraph,
     pub telegram: Telegram,
