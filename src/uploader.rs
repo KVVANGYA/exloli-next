@@ -655,21 +655,30 @@ impl ExloliUploader {
                         };
                         debug!("已上传: {}", page.page());
 
+                        // 立即写入数据库，防止后续错误导致重复处理
+                        // 优先创建 ImageEntity（按 hash 去重的关键记录）
+                        match ImageEntity::create(fileindex, page.hash(), &upload_url).await {
+                            Ok(_) => {
+                                debug!("图片记录保存成功: {}", page.page());
+                                // 成功创建图片记录后，再创建页面记录
+                                if let Err(e) = PageEntity::create(page.gallery_id(), page.page(), fileindex).await {
+                                    error!("保存页面记录失败 {}: {}，但图片记录已保存", page.page(), e);
+                                }
+                            },
+                            Err(e) => {
+                                error!("保存图片记录失败 {}: {}，这可能导致重复下载", page.page(), e);
+                                // 图片记录保存失败，仍然尝试保存页面记录
+                                if let Err(pe) = PageEntity::create(page.gallery_id(), page.page(), fileindex).await {
+                                    error!("保存页面记录也失败 {}: {}", page.page(), pe);
+                                }
+                            }
+                        }
+
                         // 更新上传进度
                         if let Some(ref callback) = callback_clone {
                             let mut prog = progress_clone.lock().await;
                             prog.uploaded_pages += 1;
                             callback(prog.clone()).await;
-                        }
-
-                        // 创建 ImageEntity
-                        if let Err(e) = ImageEntity::create(fileindex, page.hash(), &upload_url).await {
-                            error!("保存图片记录失败 {}: {}", page.page(), e);
-                            return Err(anyhow!("保存图片记录失败 {}: {}", page.page(), e));
-                        }
-                        if let Err(e) = PageEntity::create(page.gallery_id(), page.page(), fileindex).await {
-                            error!("保存页面记录失败 {}: {}", page.page(), e);
-                            return Err(anyhow!("保存页面记录失败 {}: {}", page.page(), e));
                         }
                     }
                     Result::<()>::Ok(())

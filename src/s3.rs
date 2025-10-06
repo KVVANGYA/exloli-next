@@ -66,7 +66,7 @@ impl S3Uploader {
             _ => "image/jpeg",
         };
 
-        let part = reqwest::multipart::Part::bytes(buffer)
+        let part = reqwest::multipart::Part::bytes(buffer.clone())
             .file_name(name.to_string())
             .mime_str(content_type)?;
 
@@ -90,6 +90,60 @@ impl S3Uploader {
             if status.as_u16() == 401 || status.as_u16() == 403 {
                 return Err(anyhow::anyhow!("Teletype授权失败，请检查令牌: {} - {}", status, error_text));
             }
+            
+            // 对于524超时错误，进行一次重试
+            if status.as_u16() == 524 {
+                debug!("检测到524超时错误，等待2秒后重试一次");
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                
+                // 重新构建表单进行重试
+                let part_retry = reqwest::multipart::Part::bytes(buffer.clone())
+                    .file_name(name.to_string())
+                    .mime_str(content_type)?;
+
+                let form_retry = reqwest::multipart::Form::new()
+                    .part("file", part_retry)
+                    .text("type", "images");
+
+                match self
+                    .client
+                    .put("https://teletype.in/media/")
+                    .header("Authorization", token.clone())
+                    .multipart(form_retry)
+                    .send()
+                    .await 
+                {
+                    Ok(retry_response) => {
+                        if retry_response.status().is_success() {
+                            debug!("524重试成功");
+                            let retry_text = retry_response.text().await?;
+                            match serde_json::from_str::<serde_json::Value>(&retry_text) {
+                                Ok(json) => {
+                                    if let Some(url) = json["url"].as_str() {
+                                        return Ok(url.to_string());
+                                    } else {
+                                        return Err(anyhow::anyhow!("重试成功但无法从JSON响应中提取URL: {}", retry_text));
+                                    }
+                                },
+                                Err(_) => {
+                                    let url_text = retry_text.trim();
+                                    if url_text.starts_with("http") {
+                                        return Ok(url_text.to_string());
+                                    } else {
+                                        return Err(anyhow::anyhow!("重试成功但响应内容无效: {}", retry_text));
+                                    }
+                                }
+                            };
+                        } else {
+                            debug!("524重试仍然失败: {}", retry_response.status());
+                        }
+                    }
+                    Err(e) => {
+                        debug!("524重试请求失败: {}", e);
+                    }
+                }
+            }
+            
             return Err(anyhow::anyhow!("上传到teletype.in失败: {} - {}", status, error_text));
         }
         
