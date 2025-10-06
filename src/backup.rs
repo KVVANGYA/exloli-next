@@ -382,6 +382,12 @@ impl BackupService {
             .replace("{", "\\{")
             .replace("}", "\\}");
             
+        let timestamp = chrono::Utc::now()
+            .format("%Y-%m-%d %H:%M:%S UTC")
+            .to_string()
+            .replace("-", "\\-")
+            .replace(":", "\\:");
+
         let notification = format!(
             "❌ *备份错误通知*
 
@@ -389,7 +395,7 @@ impl BackupService {
 📋 错误信息: {}
 
 🔧 请检查系统日志获取详细信息",
-            chrono::Utc::now().format("%Y\\--%m\\--%d %H:%M:%S UTC").to_string().replace("-", "\\-"),
+            timestamp,
             escaped_error
         );
 
