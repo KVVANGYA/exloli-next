@@ -1,5 +1,5 @@
 # 日志等级
-log_level = "info,sqlx=warn,teloxide=error,exloli_next=debug"
+log_level = "info,sqlx=warn,teloxide=error,exloli_next=debug,hyper=warn"
 # 下载线程的数量
 # NOTE: 上传线程数量固定为 1
 threads_num = 1

@@ -167,7 +167,7 @@ impl EhClient {
             let html = Html::parse_document(&resp.text().await?);
 
             // 英文标题、日文标题、父画廊
-            let title = html.select_text("h1#gn").expect("xpath fail: h1#gn");
+            let title = html.select_text("h1#gn").ok_or_else(|| anyhow::anyhow!("无法找到画廊标题 (h1#gn)"))?;
             let title_jp = html.select_text("h1#gj");
             let parent = html.select_attr("td.gdt2 a", "href").and_then(|s| s.parse().ok());
 
@@ -175,9 +175,8 @@ impl EhClient {
             let mut tags = IndexMap::new();
             let selector = selector!("div#taglist tr");
             for ele in html.select(&selector) {
-                let namespace = ele
-                    .select_text("td.tc")
-                    .expect("xpath fail: td.tc")
+                let namespace = html.select_text("td.tc")
+                    .ok_or_else(|| anyhow::anyhow!("无法找到标签命名空间 (td.tc)"))?
                     .trim_matches(':')
                     .to_string();
                 let tag = ele.select_texts("td div a");
@@ -185,12 +184,18 @@ impl EhClient {
             }
 
             // 收藏数量
-            let favorite = html.select_text("#favcount").expect("xpath fail: #favcount");
-            let favorite = favorite.split(' ').next().unwrap().parse().unwrap();
+            let favorite_text = html.select_text("#favcount").ok_or_else(|| anyhow::anyhow!("无法找到收藏数量 (#favcount)"))?;
+            let favorite = favorite_text.split(' ').next().unwrap().parse()
+                .map_err(|_| anyhow::anyhow!("无法解析收藏数量: {}", favorite_text))?;
 
             // 发布时间
-            let posted = &html.select_texts("td.gdt2")[0];
-            let posted = NaiveDateTime::parse_from_str(posted, "%Y-%m-%d %H:%M")?;
+            let gdt2_texts = html.select_texts("td.gdt2");
+            if gdt2_texts.is_empty() {
+                return Err(anyhow::anyhow!("无法找到画廊信息 (td.gdt2)"));
+            }
+            let posted = &gdt2_texts[0];
+            let posted = NaiveDateTime::parse_from_str(posted, "%Y-%m-%d %H:%M")
+                .map_err(|_| anyhow::anyhow!("无法解析发布时间: {}", posted))?;
 
             // 每一页的 URL
             let pages = html.select_attrs("div#gdt a", "href");
