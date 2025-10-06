@@ -5,12 +5,11 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use reqwest::header::*;
 use reqwest::Client;
-use reqwest::cookie::Cookie;
 use scraper::{Html, Selector};
 use serde::Serialize;
 use std::fmt::Debug;
 use std::time::Duration;
-use tracing::{debug, error, info, Instrument};
+use tracing::{debug, error, info, warn, Instrument};
 
 use super::error::*;
 use super::types::*;
@@ -67,16 +66,35 @@ impl EhClient {
             .connect_timeout(Duration::from_secs(30))
             .build()?;
 
-        // 手动设置初始cookie
-        // 解析cookie字符串并添加到cookie store中
-        let url = "https://exhentai.org/".parse::<reqwest::Url>().unwrap();
-        for cookie_str in cookie.split("; ") {
-            if let Ok(cookie) = reqwest::cookie::Cookie::parse(cookie_str, &url) {
-                client.cookie_store().unwrap().insert_cookie(cookie, &url);
+        let eh_client = Self(client);
+        
+        // 发送一个初始请求来设置cookie
+        let cookie_header = format!("Cookie: {}", cookie);
+        debug!("发送初始请求设置cookie: {}", cookie_header);
+        
+        // 创建一个简单的GET请求来设置cookie
+        let initial_url = "https://exhentai.org/";
+        let resp = eh_client.0
+            .get(initial_url)
+            .header(reqwest::header::COOKIE, cookie)
+            .send()
+            .await;
+            
+        match resp {
+            Ok(response) => {
+                debug!("初始请求成功，状态码: {:?}", response.status());
+                // 检查响应头中的set-cookie
+                let headers = response.headers();
+                if let Some(cookie_headers) = headers.get_all("set-cookie").iter().next() {
+                    debug!("初始响应返回的 set-cookie 头: {:?}", cookie_headers);
+                }
+            }
+            Err(e) => {
+                warn!("初始请求失败: {}", e);
             }
         }
 
-        Ok(Self(client))
+        Ok(eh_client)
     }
 
     /// 访问指定页面，返回画廊列表
@@ -89,7 +107,26 @@ impl EhClient {
     ) -> Result<(Vec<EhGalleryUrl>, Option<String>)> {
         let full_url = format!("{}?next={}", url, next);
         debug!("发送请求: {}", full_url);
-        let resp = send!(self.0.get(url).query(params).query(&[("next", next)]))?;
+        
+        // 创建请求构建器并添加调试信息
+        let request_builder = self.0.get(url).query(params).query(&[("next", next)]);
+        debug!("请求构建器创建完成");
+        
+        let resp = send!(request_builder)?;
+        debug!("收到响应，状态码: {:?}", resp.status());
+        
+        // 检查响应头中的set-cookie
+        let headers = resp.headers();
+        if let Some(cookie_headers) = headers.get_all("set-cookie").iter().next() {
+            debug!("响应返回的 set-cookie 头: {:?}", cookie_headers);
+        }
+        
+        // 检查请求是否被重定向
+        let final_url = resp.url().as_str();
+        if final_url != &full_url {
+            debug!("请求被重定向，原始URL: {}, 最终URL: {}", full_url, final_url);
+        }
+        
         let html = Html::parse_document(&resp.text().await?);
 
         let selector = selector!("table.itg.gltc tr");
