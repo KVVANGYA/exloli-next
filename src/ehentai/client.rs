@@ -217,27 +217,18 @@ impl EhClient {
             let request_url = url.url();
             let request = self.0.get(&request_url);
             
-            // 检查当前客户端的cookie
             debug!("准备发送请求到: {}", request_url);
             
-            // 输出请求头信息
+            // 发送请求并获取响应
             let resp = send!(request)?;
             
             // 检查响应状态
             debug!("响应状态: {:?}", resp.status());
             debug!("响应URL: {}", resp.url());
             
-            // 获取响应头信息
-            let headers = resp.headers().clone();
-            debug!("响应头: {:?}", headers);
-            
-            // 检查响应中的set-cookie头
-            if let Some(cookie_headers) = headers.get_all("set-cookie").iter().next() {
-                debug!("响应返回的 set-cookie 头: {:?}", cookie_headers);
-            }
-            
             // 检查是否有重定向到首页或其他非画廊页面
             let final_url = resp.url().as_str();
+            let request_url = url.url(); // 重新获取request_url用于比较
             if final_url != &request_url {
                 debug!("请求被重定向，原始URL: {}, 最终URL: {}", request_url, final_url);
                 if final_url == "https://exhentai.org/" || final_url == "https://e-hentai.org/" {
@@ -246,6 +237,15 @@ impl EhClient {
                 if final_url.contains("bounce_login") || final_url.contains("login") {
                     return Err(anyhow::anyhow!("请求被重定向到登录页面，cookie无效或已过期").into());
                 }
+            }
+            
+            // 获取响应头信息
+            let headers = resp.headers().clone();
+            debug!("响应头: {:?}", headers);
+            
+            // 检查响应中的set-cookie头
+            if let Some(cookie_headers) = headers.get_all("set-cookie").iter().next() {
+                debug!("响应返回的 set-cookie 头: {:?}", cookie_headers);
             }
             
             // 获取响应内容
