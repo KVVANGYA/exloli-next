@@ -44,7 +44,7 @@ impl EhClient {
     pub async fn new(cookie: &str) -> Result<Self> {
         info!("登陆 E 站中");
         // 将 cookie 日志级别改为 debug，避免在生产环境泄露敏感信息
-        debug!("cookie: {}", cookie);
+        debug!("初始 cookie: {}", cookie);
         
         // 创建一个带 cookie store 的客户端
         let client = Client::builder()
@@ -70,12 +70,25 @@ impl EhClient {
         debug!("发送请求: {}", uconfig_url);
         let resp1 = send!(client.get(uconfig_url).headers(headers.clone()))?;
         debug!("uconfig.php 响应状态: {:?}", resp1.status());
+        debug!("uconfig.php 响应URL: {}", resp1.url());
+        
+        // 检查uconfig.php响应中的set-cookie头
+        if let Some(cookie_headers) = resp1.headers().get_all("set-cookie").iter().next() {
+            debug!("uconfig.php 返回的 set-cookie 头: {:?}", cookie_headers);
+        }
         
         debug!("访问 mytags");
         let mytags_url = "https://exhentai.org/mytags";
         debug!("发送请求: {}", mytags_url);
         let resp2 = send!(client.get(mytags_url).headers(headers))?;
         debug!("mytags 响应状态: {:?}", resp2.status());
+        debug!("mytags 响应URL: {}", resp2.url());
+        
+        // 检查mytags响应中的set-cookie头
+        if let Some(cookie_headers) = resp2.headers().get_all("set-cookie").iter().next() {
+            debug!("mytags 返回的 set-cookie 头: {:?}", cookie_headers);
+        }
+        
         let mytags_content = resp2.text().await?;
         debug!("mytags 响应长度: {}", mytags_content.len());
 
@@ -207,11 +220,20 @@ impl EhClient {
             // 检查当前客户端的cookie
             debug!("准备发送请求到: {}", request_url);
             
+            // 输出请求头信息
             let resp = send!(request)?;
             
             // 检查响应状态
             debug!("响应状态: {:?}", resp.status());
             debug!("响应URL: {}", resp.url());
+            
+            // 检查响应头
+            debug!("响应头: {:?}", resp.headers());
+            
+            // 检查响应中的set-cookie头
+            if let Some(cookie_headers) = resp.headers().get_all("set-cookie").iter().next() {
+                debug!("响应返回的 set-cookie 头: {:?}", cookie_headers);
+            }
             
             // 检查是否有重定向到首页或其他非画廊页面
             let final_url = resp.url().as_str();
@@ -234,6 +256,10 @@ impl EhClient {
                 // 检查是否是重定向页面
                 if content.contains("location.replace") || content.contains("redirect") {
                     return Err(anyhow::anyhow!("收到重定向响应，可能是cookie无效或已过期").into());
+                }
+                // 检查是否是二进制内容（可能是压缩内容未正确解压）
+                if content.contains('\0') || content.chars().any(|c| c as u32 > 127) {
+                    return Err(anyhow::anyhow!("收到二进制内容，可能是压缩内容未正确解压或权限不足").into());
                 }
                 return Err(anyhow::anyhow!("收到的响应内容不符合预期，可能是未授权访问或重定向").into());
             }
