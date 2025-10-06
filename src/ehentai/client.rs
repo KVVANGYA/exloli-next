@@ -68,29 +68,156 @@ impl EhClient {
 
         let eh_client = Self(client);
         
-        // 发送一个初始请求来设置cookie
-        let cookie_header = format!("Cookie: {}", cookie);
-        debug!("发送初始请求设置cookie: {}", cookie_header);
+        // 需要通过访问特定页面来补全cookie
+        debug!("开始cookie补全流程，基础cookie: {}", cookie);
         
-        // 创建一个简单的GET请求来设置cookie
-        let initial_url = "https://exhentai.org/";
-        let resp = eh_client.0
-            .get(initial_url)
+        // 步骤1: 访问首页设置基础cookie
+        debug!("步骤1: 访问首页设置基础cookie");
+        let initial_resp = eh_client.0
+            .get("https://exhentai.org/")
             .header(reqwest::header::COOKIE, cookie)
             .send()
             .await;
             
-        match resp {
+        match initial_resp {
             Ok(response) => {
-                debug!("初始请求成功，状态码: {:?}", response.status());
+                debug!("首页请求成功，状态码: {:?}", response.status());
+                
+                // 检查是否被重定向到登录页面
+                let final_url = response.url().as_str();
+                if final_url.contains("bounce_login") || final_url.contains("login") {
+                    return Err(anyhow::anyhow!("基础Cookie无效或已过期，被重定向到登录页面: {}", final_url).into());
+                }
+                
                 // 检查响应头中的set-cookie
                 let headers = response.headers();
-                if let Some(cookie_headers) = headers.get_all("set-cookie").iter().next() {
-                    debug!("初始响应返回的 set-cookie 头: {:?}", cookie_headers);
+                for cookie_header in headers.get_all("set-cookie") {
+                    debug!("首页响应set-cookie: {:?}", cookie_header);
+                }
+                
+                // 读取响应内容验证
+                match response.text().await {
+                    Ok(content) => {
+                        if content.len() < 1000 {
+                            warn!("首页响应内容过短: {} 字符，可能是cookie失效", content.len());
+                        } else {
+                            debug!("首页访问成功，响应内容长度: {} 字符", content.len());
+                        }
+                    }
+                    Err(e) => {
+                        warn!("读取首页响应内容失败: {}", e);
+                    }
                 }
             }
             Err(e) => {
-                warn!("初始请求失败: {}", e);
+                warn!("首页请求失败: {}", e);
+                return Err(anyhow::anyhow!("无法连接到ExHentai服务器: {}", e).into());
+            }
+        }
+        
+        // 步骤2: 访问 /uconfig.php 获取用户配置相关cookie
+        debug!("步骤2: 访问 /uconfig.php 补全cookie");
+        let uconfig_resp = eh_client.0
+            .get("https://exhentai.org/uconfig.php")
+            .send()
+            .await;
+            
+        match uconfig_resp {
+            Ok(response) => {
+                debug!("uconfig.php 请求成功，状态码: {:?}", response.status());
+                
+                let headers = response.headers();
+                for cookie_header in headers.get_all("set-cookie") {
+                    debug!("uconfig.php set-cookie: {:?}", cookie_header);
+                }
+                
+                // 检查响应内容
+                match response.text().await {
+                    Ok(content) => {
+                        if content.contains("bounce_login") || content.contains("login") {
+                            warn!("uconfig.php 重定向到登录页面，cookie可能需要刷新");
+                        } else {
+                            debug!("uconfig.php 访问成功，响应长度: {} 字符", content.len());
+                        }
+                    }
+                    Err(e) => {
+                        warn!("读取 uconfig.php 响应失败: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("uconfig.php 请求失败: {}", e);
+                // 不中断流程，继续下一步
+            }
+        }
+        
+        // 步骤3: 访问 /mytags 获取标签相关cookie
+        debug!("步骤3: 访问 /mytags 补全cookie");
+        let mytags_resp = eh_client.0
+            .get("https://exhentai.org/mytags")
+            .send()
+            .await;
+            
+        match mytags_resp {
+            Ok(response) => {
+                debug!("mytags 请求成功，状态码: {:?}", response.status());
+                
+                let headers = response.headers();
+                for cookie_header in headers.get_all("set-cookie") {
+                    debug!("mytags set-cookie: {:?}", cookie_header);
+                }
+                
+                // 检查响应内容
+                match response.text().await {
+                    Ok(content) => {
+                        if content.contains("bounce_login") || content.contains("login") {
+                            warn!("mytags 重定向到登录页面，cookie可能需要刷新");
+                        } else {
+                            debug!("mytags 访问成功，响应长度: {} 字符", content.len());
+                        }
+                    }
+                    Err(e) => {
+                        warn!("读取 mytags 响应失败: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("mytags 请求失败: {}", e);
+                // 不中断流程
+            }
+        }
+        
+        // 步骤4: 最终验证 - 再次访问首页确认cookie完整性
+        debug!("步骤4: 最终验证cookie完整性");
+        let final_resp = eh_client.0
+            .get("https://exhentai.org/")
+            .send()
+            .await;
+            
+        match final_resp {
+            Ok(response) => {
+                debug!("最终验证请求成功，状态码: {:?}", response.status());
+                
+                let final_url = response.url().as_str();
+                if final_url.contains("bounce_login") || final_url.contains("login") {
+                    return Err(anyhow::anyhow!("Cookie补全后仍然无效，被重定向到登录页面").into());
+                }
+                
+                match response.text().await {
+                    Ok(content) => {
+                        if content.len() < 1000 {
+                            return Err(anyhow::anyhow!("Cookie补全失败，最终验证响应内容过短: {} 字符", content.len()).into());
+                        } else {
+                            info!("Cookie补全成功，最终验证通过，响应长度: {} 字符", content.len());
+                        }
+                    }
+                    Err(e) => {
+                        return Err(anyhow::anyhow!("最终验证失败: {}", e).into());
+                    }
+                }
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!("最终验证请求失败: {}", e).into());
             }
         }
 
@@ -260,17 +387,43 @@ impl EhClient {
                 
                 match encoding_str {
                     "zstd" => {
+                        // 检查原始数据是否为空
+                        if bytes.is_empty() {
+                            warn!("收到空的zstd压缩数据");
+                            return Err(anyhow::anyhow!("服务器返回空的压缩数据，可能是访问被拒绝或cookie已过期").into());
+                        }
+                        
                         // 尝试解压zstd内容
                         match zstd::decode_all(&bytes[..]) {
                             Ok(decompressed) => {
                                 debug!("zstd解压成功，解压后长度: {}", decompressed.len());
+                                
+                                // 如果解压后内容为空，这通常表示认证失败或被重定向
+                                if decompressed.is_empty() {
+                                    warn!("zstd解压后内容为空，可能是cookie无效或画廊已被删除");
+                                    // 尝试查看原始字节数据
+                                    debug!("原始压缩数据前32字节: {:?}", &bytes[..std::cmp::min(32, bytes.len())]);
+                                    return Err(anyhow::anyhow!("画廊可能已被删除或cookie已过期，服务器返回空内容").into());
+                                }
+                                
                                 String::from_utf8_lossy(&decompressed).to_string()
                             }
                             Err(e) => {
-                                debug!("zstd解压失败: {}", e);
-                                String::from_utf8_lossy(&bytes).to_string()
+                                warn!("zstd解压失败: {}，尝试使用原始数据", e);
+                                debug!("原始数据前32字节: {:?}", &bytes[..std::cmp::min(32, bytes.len())]);
+                                
+                                let raw_content = String::from_utf8_lossy(&bytes).to_string();
+                                if raw_content.trim().is_empty() {
+                                    return Err(anyhow::anyhow!("服务器返回空内容且无法解压，可能是cookie无效或画廊已被删除").into());
+                                }
+                                raw_content
                             }
                         }
+                    }
+                    "gzip" | "deflate" | "br" => {
+                        // 其他压缩格式应该由reqwest自动处理，如果到这里说明有问题
+                        warn!("收到未自动解压的{}格式数据", encoding_str);
+                        String::from_utf8_lossy(&bytes).to_string()
                     }
                     _ => String::from_utf8_lossy(&bytes).to_string()
                 }
@@ -282,16 +435,34 @@ impl EhClient {
             
             // 如果内容长度很小，可能是错误页面
             if content.len() < 1000 {
-                debug!("响应内容可能不是有效的画廊页面: {:?}", &content);
+                debug!("响应内容可能不是有效的画廊页面: {:?}", &content[..std::cmp::min(500, content.len())]);
+                
                 // 检查是否是重定向页面
                 if content.contains("location.replace") || content.contains("redirect") {
                     return Err(anyhow::anyhow!("收到重定向响应，可能是cookie无效或已过期").into());
                 }
+                
+                // 检查是否包含错误信息
+                if content.contains("This gallery has been removed") || content.contains("Gallery Not Available") {
+                    return Err(anyhow::anyhow!("画廊已被删除或不可用").into());
+                }
+                
+                // 检查是否是权限错误
+                if content.contains("You do not have permission") || content.contains("Access denied") {
+                    return Err(anyhow::anyhow!("没有访问权限，可能需要更新cookie或账户权限不足").into());
+                }
+                
+                // 检查是否是登录页面
+                if content.contains("bounce_login") || content.contains("member login") {
+                    return Err(anyhow::anyhow!("被重定向到登录页面，cookie可能已过期").into());
+                }
+                
                 // 检查是否是二进制内容（可能是压缩内容未正确解压）
                 if content.contains('\0') || content.chars().any(|c| c as u32 > 127) {
                     return Err(anyhow::anyhow!("收到二进制内容，可能是压缩内容未正确解压或权限不足").into());
                 }
-                return Err(anyhow::anyhow!("收到的响应内容不符合预期，可能是未授权访问或重定向").into());
+                
+                return Err(anyhow::anyhow!("收到的响应内容不符合预期，可能是画廊已被删除、未授权访问或重定向").into());
             }
             
             // 检查内容是否是HTML（处理可能的BOM）
