@@ -379,24 +379,10 @@ impl ExloliUploader {
 
                         // 根据文件大小决定是否使用 WebP 压缩
                         let (download_url, mut filename) = if should_compress {
-                            // 检测是否为JPG格式，避免无损压缩导致API超时
-                            let is_jpg = suffix.to_lowercase() == "jpg" || suffix.to_lowercase() == "jpeg";
-                            
-                            let webp_url = if is_jpg {
-                                // JPG格式直接使用质量100的有损压缩，避免API超时
-                                format!("https://wsrv.nl/?url={}&output=webp&q=100&n=-1",
-                                    urlencoding::encode(&url))
-                            } else {
-                                // 其他格式使用无损压缩
-                                format!("https://wsrv.nl/?url={}&output=webp&ll&n=-1",
-                                    urlencoding::encode(&url))
-                            };
-                            
-                            if is_jpg {
-                                debug!("使用WebP质量100压缩服务下载JPG图片: {}", webp_url);
-                            } else {
-                                debug!("使用WebP无损压缩服务下载图片: {}", webp_url);
-                            }
+                            // 使用images.weserv.nl作为主要API，因为它对JPG支持无损压缩不会导致504
+                            let webp_url = format!("https://images.weserv.nl/?url={}&output=webp&ll&n=-1",
+                                urlencoding::encode(&url));
+                            debug!("使用images.weserv.nl WebP无损压缩服务下载图片: {}", webp_url);
                             (webp_url, format!("{}.webp", page.hash()))
                         } else {
                             (url.clone(), format!("{}.{}", page.hash(), suffix))
@@ -418,7 +404,7 @@ impl ExloliUploader {
                                         // 504 Gateway Timeout，可能是无损压缩导致的超时，尝试有损压缩质量100
                                         warn!("压缩服务返回504超时，尝试有损压缩质量100重试: {}", download_url);
                                         
-                                        let fallback_url = if download_url.contains("wsrv.nl") {
+                                        let fallback_url = if download_url.contains("images.weserv.nl") {
                                             format!("https://wsrv.nl/?url={}&output=webp&q=100&n=-1",
                                                 urlencoding::encode(&url))
                                         } else {
@@ -488,37 +474,24 @@ impl ExloliUploader {
                         // 检查 WebP 压缩结果
                         if should_compress && (bytes.len() < 1000 || bytes.len() > 4_900_000) {
                             if bytes.len() < 1000 {
-                                warn!("wsrv.nl 无损压缩失败（文件太小: {} bytes），尝试备用API", bytes.len());
+                                warn!("images.weserv.nl 无损压缩失败（文件太小: {} bytes），尝试备用API", bytes.len());
                             } else {
-                                warn!("wsrv.nl 无损压缩过大（{} bytes > 4.9MB），尝试 wsrv.nl 有损压缩", bytes.len());
+                                warn!("images.weserv.nl 无损压缩过大（{} bytes > 4.9MB），尝试有损压缩", bytes.len());
                             }
-                            
-                            let url_without_protocol = url
-                                .strip_prefix("https://")
-                                .or_else(|| url.strip_prefix("http://"))
-                                .unwrap_or(&url);
                             
                             // 根据失败原因选择处理方式
                             let (service_url, service_name) = if bytes.len() > 4_900_000 {
-                                // 文件过大，先尝试 wsrv.nl 有损压缩
-                                let wsrv_lossy_url = format!("https://wsrv.nl/?url={}&output=webp&q=95&n=-1",
+                                // 文件过大，先尝试images.weserv.nl有损压缩
+                                let images_lossy_url = format!("https://images.weserv.nl/?url={}&output=webp&q=95&n=-1",
                                     urlencoding::encode(&url));
-                                debug!("尝试 wsrv.nl 有损压缩: {}", wsrv_lossy_url);
-                                (wsrv_lossy_url, "wsrv.nl 有损")
+                                debug!("尝试 images.weserv.nl 有损压缩: {}", images_lossy_url);
+                                (images_lossy_url, "images.weserv.nl 有损")
                             } else {
-                                // 文件太小（可能是错误），尝试备用API images.weserv.nl
-                                // 检测JPG格式避免无损压缩导致超时
-                                let is_jpg = suffix.to_lowercase() == "jpg" || suffix.to_lowercase() == "jpeg";
-                                let backup_url = if is_jpg {
-                                    format!("https://images.weserv.nl/?url={}&output=webp&q=100&n=-1",
-                                        urlencoding::encode(&url))
-                                } else {
-                                    format!("https://images.weserv.nl/?url={}&output=webp&ll&n=-1",
-                                        urlencoding::encode(&url))
-                                };
-                                let service_name = if is_jpg { "images.weserv.nl 质量100" } else { "images.weserv.nl 无损" };
-                                debug!("尝试备用 API {}: {}", service_name, backup_url);
-                                (backup_url, service_name)
+                                // 文件太小（可能是错误），尝试备用API wsrv.nl
+                                let backup_url = format!("https://wsrv.nl/?url={}&output=webp&ll&n=-1",
+                                    urlencoding::encode(&url));
+                                debug!("尝试备用 API wsrv.nl 无损: {}", backup_url);
+                                (backup_url, "wsrv.nl 无损")
                             };
                             debug!("正在请求: {}", service_url);
                             
@@ -536,58 +509,58 @@ impl ExloliUploader {
                                         }
                                         
                                         // 根据服务名称决定下一步处理
-                                        if service_name == "wsrv.nl 有损" {
-                                            warn!("wsrv.nl 有损压缩失败，尝试备用API images.weserv.nl");
-                                            // wsrv.nl 有损都失败了，备用API也用有损
-                                            let backup_url = format!("https://images.weserv.nl/?url={}&output=webp&q=95&n=-1",
+                                        if service_name == "images.weserv.nl 有损" {
+                                            warn!("images.weserv.nl 有损压缩失败，尝试备用API wsrv.nl");
+                                            // images.weserv.nl 有损都失败了，备用API也用有损
+                                            let backup_url = format!("https://wsrv.nl/?url={}&output=webp&q=95&n=-1",
                                                 urlencoding::encode(&url));
-                                            debug!("尝试备用 API images.weserv.nl 有损: {}", backup_url);
+                                            debug!("尝试备用 API wsrv.nl 有损: {}", backup_url);
                                             
                                             match client.get(&backup_url).send().await {
                                                 Ok(backup_resp) => match backup_resp.bytes().await {
                                                     Ok(backup_bytes) if backup_bytes.len() >= 1000 && backup_bytes.len() <= 4_900_000 => {
-                                                        debug!("images.weserv.nl 有损压缩成功: {} bytes", backup_bytes.len());
+                                                        debug!("wsrv.nl 有损压缩成功: {} bytes", backup_bytes.len());
                                                         backup_bytes
                                                     },
                                                     Ok(backup_bytes) => {
-                                                        warn!("images.weserv.nl 也失败（{} bytes），尝试本地转码", backup_bytes.len());
+                                                        warn!("wsrv.nl 也失败（{} bytes），尝试本地转码", backup_bytes.len());
                                                         Self::try_local_transcode(&client, &url, &page, &mut filename, suffix).await?.into()
                                                     },
                                                     Err(e) => {
-                                                        warn!("images.weserv.nl 请求失败: {}，尝试本地转码", e);
+                                                        warn!("wsrv.nl 请求失败: {}，尝试本地转码", e);
                                                         Self::try_local_transcode(&client, &url, &page, &mut filename, suffix).await?.into()
                                                     }
                                                 },
                                                 Err(e) => {
-                                                    warn!("images.weserv.nl 连接失败: {}，尝试本地转码", e);
+                                                    warn!("wsrv.nl 连接失败: {}，尝试本地转码", e);
                                                     Self::try_local_transcode(&client, &url, &page, &mut filename, suffix).await?.into()
                                                 }
                                             }
-                                        } else if service_name == "images.weserv.nl 无损" {
-                                            warn!("images.weserv.nl 无损压缩失败，尝试 images.weserv.nl 有损压缩");
-                                            // images.weserv.nl 无损失败，尝试有损
-                                            let backup_url = format!("https://images.weserv.nl/?url={}&output=webp&q=95&n=-1",
+                                        } else if service_name == "wsrv.nl 无损" {
+                                            warn!("wsrv.nl 无损压缩失败，尝试 wsrv.nl 有损压缩");
+                                            // wsrv.nl 无损失败，尝试有损
+                                            let backup_url = format!("https://wsrv.nl/?url={}&output=webp&q=95&n=-1",
                                                 urlencoding::encode(&url));
-                                            debug!("尝试 images.weserv.nl 有损: {}", backup_url);
+                                            debug!("尝试 wsrv.nl 有损: {}", backup_url);
                                             
                                             match client.get(&backup_url).send().await {
                                                 Ok(backup_resp) => match backup_resp.bytes().await {
                                                     Ok(backup_bytes) if backup_bytes.len() >= 1000 && backup_bytes.len() <= 4_900_000 => {
-                                                        debug!("images.weserv.nl 有损压缩成功: {} bytes", backup_bytes.len());
+                                                        debug!("wsrv.nl 有损压缩成功: {} bytes", backup_bytes.len());
                                                         backup_bytes
                                                     },
                                                     Ok(backup_bytes) => {
-                                                        warn!("images.weserv.nl 也失败（{} bytes），尝试本地转码", backup_bytes.len());
+                                                        warn!("wsrv.nl 也失败（{} bytes），尝试本地转码", backup_bytes.len());
                                                         // 进入本地转码逻辑
                                                         Self::try_local_transcode(&client, &url, &page, &mut filename, suffix).await?.into()
                                                     },
                                                     Err(e) => {
-                                                        warn!("images.weserv.nl 请求失败: {}，尝试本地转码", e);
+                                                        warn!("wsrv.nl 请求失败: {}，尝试本地转码", e);
                                                         Self::try_local_transcode(&client, &url, &page, &mut filename, suffix).await?.into()
                                                     }
                                                 },
                                                 Err(e) => {
-                                                    warn!("images.weserv.nl 连接失败: {}，尝试本地转码", e);
+                                                    warn!("wsrv.nl 连接失败: {}，尝试本地转码", e);
                                                     Self::try_local_transcode(&client, &url, &page, &mut filename, suffix).await?.into()
                                                 }
                                             }
@@ -601,21 +574,21 @@ impl ExloliUploader {
                                             match client.get(&backup_url).send().await {
                                                 Ok(backup_resp) => match backup_resp.bytes().await {
                                                     Ok(backup_bytes) if backup_bytes.len() >= 1000 && backup_bytes.len() <= 4_900_000 => {
-                                                        debug!("images.weserv.nl 有损压缩成功: {} bytes", backup_bytes.len());
+                                                        debug!("wsrv.nl 有损压缩成功: {} bytes", backup_bytes.len());
                                                         backup_bytes
                                                     },
                                                     Ok(backup_bytes) => {
-                                                        warn!("images.weserv.nl 也失败（{} bytes），尝试本地转码", backup_bytes.len());
+                                                        warn!("wsrv.nl 也失败（{} bytes），尝试本地转码", backup_bytes.len());
                                                         // 进入本地转码逻辑
                                                         Self::try_local_transcode(&client, &url, &page, &mut filename, suffix).await?.into()
                                                     },
                                                     Err(e) => {
-                                                        warn!("images.weserv.nl 请求失败: {}，尝试本地转码", e);
+                                                        warn!("wsrv.nl 请求失败: {}，尝试本地转码", e);
                                                         Self::try_local_transcode(&client, &url, &page, &mut filename, suffix).await?.into()
                                                     }
                                                 },
                                                 Err(e) => {
-                                                    warn!("images.weserv.nl 连接失败: {}，尝试本地转码", e);
+                                                    warn!("wsrv.nl 连接失败: {}，尝试本地转码", e);
                                                     Self::try_local_transcode(&client, &url, &page, &mut filename, suffix).await?.into()
                                                 }
                                             }
