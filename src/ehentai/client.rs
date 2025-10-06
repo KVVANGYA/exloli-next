@@ -46,8 +46,8 @@ impl EhClient {
         // 将 cookie 日志级别改为 debug，避免在生产环境泄露敏感信息
         debug!("初始 cookie: {}", cookie);
         
-        // 创建一个带 cookie store 的客户端
-        let client = Client::builder()
+        // 创建一个带 cookie store 的客户端用于初始化
+        let init_client = Client::builder()
             .cookie_store(true)
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(30))
@@ -68,7 +68,7 @@ impl EhClient {
         debug!("访问 uconfig.php");
         let uconfig_url = "https://exhentai.org/uconfig.php";
         debug!("发送请求: {}", uconfig_url);
-        let resp1 = send!(client.get(uconfig_url).headers(headers.clone()))?;
+        let resp1 = send!(init_client.get(uconfig_url).headers(headers.clone()))?;
         debug!("uconfig.php 响应状态: {:?}", resp1.status());
         debug!("uconfig.php 响应URL: {}", resp1.url());
         
@@ -80,7 +80,7 @@ impl EhClient {
         debug!("访问 mytags");
         let mytags_url = "https://exhentai.org/mytags";
         debug!("发送请求: {}", mytags_url);
-        let resp2 = send!(client.get(mytags_url).headers(headers))?;
+        let resp2 = send!(init_client.get(mytags_url).headers(headers))?;
         debug!("mytags 响应状态: {:?}", resp2.status());
         debug!("mytags 响应URL: {}", resp2.url());
         
@@ -104,7 +104,7 @@ impl EhClient {
             USER_AGENT => "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0"
         };
 
-        // 重新构建客户端，使用相同的cookie store但设置默认头部
+        // 使用相同的cookie store创建最终客户端
         let client = Client::builder()
             .cookie_store(true)
             .default_headers(final_headers)
