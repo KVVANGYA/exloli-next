@@ -13,7 +13,7 @@ fn default_allow_public_commands() -> bool {
 }
 
 fn default_api_timeout() -> Duration {
-    Duration::from_secs(60)
+    Duration::from_secs(30)
 }
 
 #[derive(Debug, Clone, Deserialize)]

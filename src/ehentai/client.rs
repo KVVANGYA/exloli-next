@@ -44,7 +44,7 @@ pub struct EhClient {
 impl EhClient {
     #[tracing::instrument(skip(cookie))]
     pub async fn new(cookie: &str) -> Result<Self> {
-        Self::new_with_timeout(cookie, Duration::from_secs(60)).await
+        Self::new_with_timeout(cookie, Duration::from_secs(30)).await
     }
 
     #[tracing::instrument(skip(cookie))]
