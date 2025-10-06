@@ -33,6 +33,15 @@ docker-compose up -d
 
 请参考 config.toml.example
 
+### 超时配置
+
+可以通过 `api_timeout` 参数配置API请求的超时时间，默认为30秒。如果网络环境较差，可以适当增加超时时间，例如：
+
+```toml
+# API 请求超时时间 (默认: 30s)
+api_timeout = "60s"
+```
+
 ## 从 exloli 迁移
 
 直接运行即可，但是建议备份好数据库
