@@ -12,7 +12,7 @@ use teloxide::types::MessageId;
 use teloxide::utils::html::{code_inline, link};
 use tokio::task::JoinHandle;
 use tokio::time;
-use tracing::{debug, error, info, Instrument};
+use tracing::{debug, error, info, warn, Instrument};
 
 use crate::bot::Bot;
 use crate::config::Config;
@@ -364,9 +364,9 @@ impl ExloliUploader {
                         };
 
                         // 根据文件大小决定是否使用 WebP 压缩
-                        // 使用 ll 参数启用无损压缩
-                        let (download_url, filename) = if should_compress {
-                            let webp_url = format!("https://images.weserv.nl/?url={}&output=webp&ll&n=-1",
+                        // 使用 ll 参数启用无损压缩，&n=-1 保留 GIF 所有帧
+                        let (download_url, mut filename) = if should_compress {
+                            let webp_url = format!("https://wsrv.nl/?url={}&output=webp&ll&n=-1",
                                 urlencoding::encode(&url));
                             (webp_url, format!("{}.webp", page.hash()))
                         } else {
@@ -374,7 +374,7 @@ impl ExloliUploader {
                         };
 
                         // 下载图片
-                        let bytes = match client.get(&download_url).send().await {
+                        let mut bytes = match client.get(&download_url).send().await {
                             Ok(response) => match response.bytes().await {
                                 Ok(bytes) => bytes,
                                 Err(e) => {
@@ -387,9 +387,31 @@ impl ExloliUploader {
                                 return Err(anyhow!("请求图片失败 {}: {}", page.page(), e));
                             }
                         };
-                        debug!("已下载: {} ({}, {} bytes)", page.page(),
-                            if should_compress { "WebP" } else { suffix },
-                            bytes.len());
+
+                        // 检查 WebP 压缩是否失败（文件太小说明是错误页面）
+                        if should_compress && bytes.len() < 1000 {
+                            warn!("WebP 压缩失败（文件太小: {} bytes），降级使用原图", bytes.len());
+                            // 降级使用原图
+                            filename = format!("{}.{}", page.hash(), suffix);
+                            bytes = match client.get(&url).send().await {
+                                Ok(response) => match response.bytes().await {
+                                    Ok(b) => b,
+                                    Err(e) => {
+                                        error!("下载原图失败 {}: {}", page.page(), e);
+                                        return Err(anyhow!("下载原图失败 {}: {}", page.page(), e));
+                                    }
+                                },
+                                Err(e) => {
+                                    error!("请求原图失败 {}: {}", page.page(), e);
+                                    return Err(anyhow!("请求原图失败 {}: {}", page.page(), e));
+                                }
+                            };
+                            debug!("已下载: {} (原图降级, {} bytes)", page.page(), bytes.len());
+                        } else {
+                            debug!("已下载: {} ({}, {} bytes)", page.page(),
+                                if should_compress { "WebP" } else { suffix },
+                                bytes.len());
+                        }
 
                         // 更新下载进度
                         if let Some(ref callback) = callback_clone {
