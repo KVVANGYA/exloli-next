@@ -3,3 +3,9 @@ target
 .idea
 .git
 .env
+.github
+*.md
+.gitignore
+.vscode
+*.log
+*.tmp
