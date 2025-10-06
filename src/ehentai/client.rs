@@ -248,8 +248,9 @@ impl EhClient {
                 return Err(anyhow::anyhow!("收到的响应内容不符合预期，可能是未授权访问或重定向").into());
             }
             
-            // 检查内容是否是HTML
-            if !content.trim_start().starts_with("<!DOCTYPE html>") && !content.trim_start().starts_with("<html") {
+            // 检查内容是否是HTML（处理可能的BOM）
+            let trimmed_content = content.trim_start();
+            if !trimmed_content.starts_with("<!DOCTYPE html>") && !trimmed_content.starts_with("<html") {
                 debug!("响应内容不是HTML格式: {}", &content[..std::cmp::min(500, content.len())]);
                 return Err(anyhow::anyhow!("收到的响应不是HTML格式，可能是未授权访问").into());
             }
