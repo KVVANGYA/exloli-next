@@ -45,13 +45,20 @@ impl EhClient {
         // 将 cookie 日志级别改为 debug，避免在生产环境泄露敏感信息
         debug!("cookie: {}", cookie);
         let headers = headers! {
-            ACCEPT => "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            ACCEPT_ENCODING => "gzip, deflate, br", 
-            ACCEPT_LANGUAGE => "zh-CN,zh;q=0.9,en;q=0.8",
-            CACHE_CONTROL => "max-age=0",
-            CONNECTION => "keep-alive",
-            HOST => "exhentai.org",
+            ACCEPT => "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            ACCEPT_ENCODING => "gzip, deflate, br, zstd", 
+            ACCEPT_LANGUAGE => "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+            CACHE_CONTROL => "no-cache",
+            PRAGMA => "no-cache",
+            PRIORITY => "u=0, i",
             REFERER => "https://exhentai.org",
+            SEC_CH_UA => "\"Microsoft Edge\";v=\"141\", \"Not?A_Brand\";v=\"8\", \"Chromium\";v=\"141\"",
+            SEC_CH_UA_MOBILE => "?0",
+            SEC_CH_UA_PLATFORM => "\"Windows\"",
+            SEC_FETCH_DEST => "document",
+            SEC_FETCH_MODE => "navigate",
+            SEC_FETCH_SITE => "cross-site",
+            SEC_FETCH_USER => "?1",
             UPGRADE_INSECURE_REQUESTS => "1",
             USER_AGENT => "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0",
             COOKIE => cookie
