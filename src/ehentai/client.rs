@@ -247,7 +247,35 @@ impl EhClient {
                 }
             }
             
-            let content = resp.text().await?;
+            // 获取响应内容
+            let bytes = resp.bytes().await?;
+            debug!("响应字节长度: {}", bytes.len());
+            
+            // 检查内容编码并尝试解压
+            let content = if let Some(encoding) = resp.headers().get("content-encoding") {
+                let encoding_str = encoding.to_str().unwrap_or("");
+                debug!("内容编码: {}", encoding_str);
+                
+                match encoding_str {
+                    "zstd" => {
+                        // 尝试解压zstd内容
+                        match zstd::decode_all(&bytes[..]) {
+                            Ok(decompressed) => {
+                                debug!("zstd解压成功，解压后长度: {}", decompressed.len());
+                                String::from_utf8_lossy(&decompressed).to_string()
+                            }
+                            Err(e) => {
+                                debug!("zstd解压失败: {}", e);
+                                String::from_utf8_lossy(&bytes).to_string()
+                            }
+                        }
+                    }
+                    _ => String::from_utf8_lossy(&bytes).to_string()
+                }
+            } else {
+                String::from_utf8_lossy(&bytes).to_string()
+            };
+            
             debug!("响应内容长度: {}", content.len());
             
             // 如果内容长度很小，可能是错误页面
