@@ -61,20 +61,22 @@ impl EhClient {
         // 设置其他必要的请求头
         headers.insert(ACCEPT, HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"));
         headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6"));
-        headers.insert(REFERER, HeaderValue::from_static("https://exhentai.org"));
+        headers.insert(REFERER, HeaderValue::from_static("https://exhentai.org/"));
         headers.insert(USER_AGENT, HeaderValue::from_static("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0"));
 
         // 获取必要的 cookie
         debug!("访问 uconfig.php");
         let uconfig_url = "https://exhentai.org/uconfig.php";
         debug!("发送请求: {}", uconfig_url);
-        let _response = send!(client.get(uconfig_url).headers(headers.clone()))?;
+        let resp1 = send!(client.get(uconfig_url).headers(headers.clone()))?;
+        debug!("uconfig.php 响应状态: {:?}", resp1.status());
         
         debug!("访问 mytags");
         let mytags_url = "https://exhentai.org/mytags";
         debug!("发送请求: {}", mytags_url);
-        let _response = send!(client.get(mytags_url).headers(headers))?;
-        let mytags_content = _response.text().await?;
+        let resp2 = send!(client.get(mytags_url).headers(headers))?;
+        debug!("mytags 响应状态: {:?}", resp2.status());
+        let mytags_content = resp2.text().await?;
         debug!("mytags 响应长度: {}", mytags_content.len());
 
         // 设置最终使用的默认头部，但不包括COOKIE，因为cookie应该由cookie store管理
@@ -84,7 +86,7 @@ impl EhClient {
             ACCEPT_LANGUAGE => "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
             CACHE_CONTROL => "no-cache",
             PRAGMA => "no-cache",
-            REFERER => "https://exhentai.org",
+            REFERER => "https://exhentai.org/",
             UPGRADE_INSECURE_REQUESTS => "1",
             USER_AGENT => "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0"
         };
@@ -209,14 +211,37 @@ impl EhClient {
             
             // 检查响应状态
             debug!("响应状态: {:?}", resp.status());
+            debug!("响应URL: {}", resp.url());
+            
+            // 检查是否有重定向到首页或其他非画廊页面
+            let final_url = resp.url().as_str();
+            if final_url != &request_url {
+                debug!("请求被重定向，原始URL: {}, 最终URL: {}", request_url, final_url);
+                if final_url == "https://exhentai.org/" || final_url == "https://e-hentai.org/" {
+                    return Err(anyhow::anyhow!("请求被重定向到首页，cookie可能无效或已过期").into());
+                }
+                if final_url.contains("bounce_login") || final_url.contains("login") {
+                    return Err(anyhow::anyhow!("请求被重定向到登录页面，cookie无效或已过期").into());
+                }
+            }
             
             let content = resp.text().await?;
             debug!("响应内容长度: {}", content.len());
             
             // 如果内容长度很小，可能是错误页面
             if content.len() < 1000 {
-                debug!("响应内容可能不是有效的画廊页面: {}", &content[..std::cmp::min(500, content.len())]);
-                return Err(anyhow::anyhow!("收到的响应内容不符合预期，可能是未授权访问").into());
+                debug!("响应内容可能不是有效的画廊页面: {:?}", &content);
+                // 检查是否是重定向页面
+                if content.contains("location.replace") || content.contains("redirect") {
+                    return Err(anyhow::anyhow!("收到重定向响应，可能是cookie无效或已过期").into());
+                }
+                return Err(anyhow::anyhow!("收到的响应内容不符合预期，可能是未授权访问或重定向").into());
+            }
+            
+            // 检查内容是否是HTML
+            if !content.trim_start().starts_with("<!DOCTYPE html>") && !content.trim_start().starts_with("<html") {
+                debug!("响应内容不是HTML格式: {}", &content[..std::cmp::min(500, content.len())]);
+                return Err(anyhow::anyhow!("收到的响应不是HTML格式，可能是未授权访问").into());
             }
             
             let html = Html::parse_document(&content);
