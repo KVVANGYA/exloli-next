@@ -856,6 +856,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unicode-width",
+ "urlencoding",
 ]
 
 [[package]]

@@ -82,6 +82,8 @@ impl ExloliUploader {
             }
             if let Err(err) = self.try_upload(&next, true).await {
                 error!("check_and_upload: {:?}\n{}", err, Backtrace::force_capture());
+                // 通知管理员上传失败
+                self.notify_admins(&format!("画廊上传失败\n\nURL: {}\n错误: {}", next.url(), err)).await;
             }
             time::sleep(Duration::from_secs(1)).await;
         }
@@ -346,55 +348,84 @@ impl ExloliUploader {
                         if suffix == "gif" {
                             continue;
                         }
-                        
+
+                        // 先获取 Content-Length 检查文件大小
+                        let should_compress = match client.head(&url).send().await {
+                            Ok(response) => {
+                                if let Some(content_length) = response.headers().get("content-length") {
+                                    if let Ok(size_str) = content_length.to_str() {
+                                        if let Ok(size) = size_str.parse::<usize>() {
+                                            let should_compress = size > 1_000_000; // 超过 1MB
+                                            if should_compress {
+                                                debug!("图片 {} 大小 {} bytes，使用 WebP 压缩", page.page(), size);
+                                            }
+                                            should_compress
+                                        } else { false }
+                                    } else { false }
+                                } else { false }
+                            }
+                            Err(_) => false, // HEAD 失败则不压缩
+                        };
+
+                        // 根据文件大小决定是否使用 WebP 压缩
+                        let (download_url, filename) = if should_compress {
+                            let webp_url = format!("https://images.weserv.nl/?url={}&output=webp&q=100",
+                                urlencoding::encode(&url));
+                            (webp_url, format!("{}.webp", page.hash()))
+                        } else {
+                            (url.clone(), format!("{}.{}", page.hash(), suffix))
+                        };
+
                         // 下载图片
-                        let filename = format!("{}.{}", page.hash(), suffix);
-                        let bytes = match client.get(&url).send().await {
+                        let bytes = match client.get(&download_url).send().await {
                             Ok(response) => match response.bytes().await {
                                 Ok(bytes) => bytes,
                                 Err(e) => {
                                     error!("下载图片失败 {}: {}", page.page(), e);
-                                    continue;
+                                    return Err(anyhow!("下载图片失败 {}: {}", page.page(), e));
                                 }
                             },
                             Err(e) => {
                                 error!("请求图片失败 {}: {}", page.page(), e);
-                                continue;
+                                return Err(anyhow!("请求图片失败 {}: {}", page.page(), e));
                             }
                         };
-                        debug!("已下载: {}", page.page());
-                        
+                        debug!("已下载: {} ({}, {} bytes)", page.page(),
+                            if should_compress { "WebP" } else { suffix },
+                            bytes.len());
+
                         // 更新下载进度
                         if let Some(ref callback) = callback_clone {
                             let mut prog = progress_clone.lock().await;
                             prog.downloaded_pages += 1;
                             callback(prog.clone()).await;
                         }
-                        
+
                         // 上传到 S3
                         let upload_url = match s3_clone.upload(&filename, &mut bytes.as_ref()).await {
                             Ok(url) => url,
                             Err(e) => {
                                 error!("上传图片失败 {}: {}", page.page(), e);
-                                continue;
+                                return Err(anyhow!("上传图片失败 {}: {}", page.page(), e));
                             }
                         };
                         debug!("已上传: {}", page.page());
-                        
+
                         // 更新上传进度
                         if let Some(ref callback) = callback_clone {
                             let mut prog = progress_clone.lock().await;
                             prog.uploaded_pages += 1;
                             callback(prog.clone()).await;
                         }
-                        
+
                         // 保存到数据库
                         if let Err(e) = ImageEntity::create(fileindex, page.hash(), &upload_url).await {
                             error!("保存图片记录失败 {}: {}", page.page(), e);
-                            continue;
+                            return Err(anyhow!("保存图片记录失败 {}: {}", page.page(), e));
                         }
                         if let Err(e) = PageEntity::create(page.gallery_id(), page.page(), fileindex).await {
                             error!("保存页面记录失败 {}: {}", page.page(), e);
+                            return Err(anyhow!("保存页面记录失败 {}: {}", page.page(), e));
                         }
                     }
                     Result::<()>::Ok(())
@@ -471,6 +502,18 @@ impl ExloliUploader {
         text.push_str(&format!("{}: {}", code_inline("原始地址"), gallery.url().url()));
 
         Ok(text)
+    }
+
+    /// 通知所有管理员
+    async fn notify_admins(&self, message: &str) {
+        for user_id in &self.config.telegram.trusted_users {
+            if let Ok(chat_id) = user_id.parse::<i64>() {
+                let result = self.bot.send_message(ChatId(chat_id), message).await;
+                if let Err(e) = result {
+                    error!("向管理员 {} 发送通知失败: {}", user_id, e);
+                }
+            }
+        }
     }
 }
 
