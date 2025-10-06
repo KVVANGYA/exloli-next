@@ -366,8 +366,14 @@ impl ExloliUploader {
                         // 根据文件大小决定是否使用 WebP 压缩
                         // 使用 ll 参数启用无损压缩，&n=-1 保留 GIF 所有帧
                         let (download_url, mut filename) = if should_compress {
+                            // 去掉协议头（https:// 或 http://）
+                            let url_without_protocol = url
+                                .strip_prefix("https://")
+                                .or_else(|| url.strip_prefix("http://"))
+                                .unwrap_or(&url);
+                            
                             let webp_url = format!("https://wsrv.nl/?url={}&output=webp&ll&n=-1",
-                                urlencoding::encode(&url));
+                                urlencoding::encode(url_without_protocol));
                             (webp_url, format!("{}.webp", page.hash()))
                         } else {
                             (url.clone(), format!("{}.{}", page.hash(), suffix))
