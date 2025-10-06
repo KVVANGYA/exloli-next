@@ -233,15 +233,51 @@ impl EhClient {
     #[tracing::instrument(skip(self))]
     pub async fn get_image_url(&self, page: &EhPageUrl) -> Result<(u32, String)> {
         let resp = send!(self.0.get(&page.url()))?;
-        let (url, nl, fileindex) = {
+        let (original_url, url, nl, fileindex) = {
             let html = Html::parse_document(&resp.text().await?);
+
+            // 优先尝试获取原图链接 (div#i6 div a[href*="fullimg"])
+            let original_url = html
+                .select(&selector!("div#i6 div a[href*=\"fullimg\"]"))
+                .next()
+                .and_then(|ele| ele.value().attr("href"))
+                .map(|s| s.to_string());
+
             let url = html.select_attr("img#img", "src").unwrap();
             let nl = html.select_attr("img#img", "onerror").and_then(extract_nl);
             let fileindex = extract_fileindex(&url).unwrap();
-            (url, nl, fileindex)
+            (original_url, url, nl, fileindex)
         };
 
-        return if send!(self.0.head(&url)).is_ok() {
+        // 优先使用原图链接
+        if let Some(original_url) = original_url {
+            debug!("发现原图链接: {}", original_url);
+            // 获取302跳转后的真实URL
+            match self.0.get(&original_url).send().await {
+                Ok(resp) => {
+                    let final_url = resp.url().to_string();
+                    debug!("原图跳转后的URL: {}", final_url);
+                    return Ok((fileindex, final_url));
+                }
+                Err(e) => {
+                    debug!("原图链接请求失败: {}, 降级使用普通图片", e);
+                    // 如果原图链接失效，降级使用普通图片
+                }
+            }
+        }
+
+        self.fallback_to_normal_image(page, url, nl, fileindex).await
+    }
+
+    /// 降级使用普通图片
+    async fn fallback_to_normal_image(
+        &self,
+        page: &EhPageUrl,
+        url: String,
+        nl: Option<String>,
+        fileindex: u32,
+    ) -> Result<(u32, String)> {
+        if send!(self.0.head(&url)).is_ok() {
             Ok((fileindex, url))
         } else if nl.is_some() {
             let resp = send!(self.0.get(&page.with_nl(&nl.unwrap()).url()))?;
@@ -250,7 +286,7 @@ impl EhClient {
             Ok((fileindex, url))
         } else {
             Err(EhError::HaHUrlBroken(url))
-        };
+        }
     }
 }
 
