@@ -347,7 +347,7 @@ impl ExloliUploader {
                         let suffix = url.split('.').last().unwrap_or("jpg");
 
                         // 先获取 Content-Length 检查文件大小
-                        let should_compress = match client.head(&url).send().await {
+                        let (should_compress, file_size) = match client.head(&url).send().await {
                             Ok(response) => {
                                 if let Some(content_length) = response.headers().get("content-length") {
                                     if let Ok(size_str) = content_length.to_str() {
@@ -357,23 +357,23 @@ impl ExloliUploader {
                                             if should_compress {
                                                 debug!("图片 {} 大小 {} bytes，使用 WebP 压缩", page.page(), size);
                                             }
-                                            should_compress
+                                            (should_compress, size)
                                         } else { 
                                             debug!("图片 {} HEAD 请求 Content-Length 解析失败: {}", page.page(), size_str);
-                                            false 
+                                            (false, 0)
                                         }
                                     } else { 
                                         debug!("图片 {} HEAD 请求 Content-Length 转换字符串失败", page.page());
-                                        false 
+                                        (false, 0)
                                     }
                                 } else { 
                                     debug!("图片 {} HEAD 请求没有 Content-Length 头", page.page());
-                                    false 
+                                    (false, 0)
                                 }
                             }
                             Err(e) => {
                                 debug!("图片 {} HEAD 请求失败: {}", page.page(), e);
-                                false // HEAD 失败则不压缩
+                                (false, 0) // HEAD 失败则不压缩
                             }
                         };
 
@@ -386,9 +386,10 @@ impl ExloliUploader {
                                 .or_else(|| url.strip_prefix("http://"))
                                 .unwrap_or(&url);
                             
+                            // 总是先尝试无损压缩
                             let webp_url = format!("https://wsrv.nl/?url={}&output=webp&ll&n=-1",
                                 urlencoding::encode(url_without_protocol));
-                            debug!("使用WebP压缩服务下载图片: {}", webp_url);
+                            debug!("使用WebP无损压缩服务下载图片: {}", webp_url);
                             (webp_url, format!("{}.webp", page.hash()))
                         } else {
                             (url.clone(), format!("{}.{}", page.hash(), suffix))
@@ -440,35 +441,114 @@ impl ExloliUploader {
                             }
                         };
 
-                        // 检查 WebP 压缩是否失败（文件太小说明是错误页面）
-                        if should_compress && bytes.len() < 1000 {
-                            warn!("wsrv.nl 压缩失败（文件太小: {} bytes），尝试备用服务", bytes.len());
+                        // 检查 WebP 压缩结果
+                        if should_compress && (bytes.len() < 1000 || bytes.len() > 4_900_000) {
+                            if bytes.len() < 1000 {
+                                warn!("wsrv.nl 无损压缩失败（文件太小: {} bytes），尝试备用API", bytes.len());
+                            } else {
+                                warn!("wsrv.nl 无损压缩过大（{} bytes > 4.9MB），尝试 wsrv.nl 有损压缩", bytes.len());
+                            }
                             
-                            // 尝试备用服务 images.weserv.nl (与主服务一样去掉协议头)
                             let url_without_protocol = url
                                 .strip_prefix("https://")
                                 .or_else(|| url.strip_prefix("http://"))
                                 .unwrap_or(&url);
-                            let fallback_url = format!("https://images.weserv.nl/?url={}&output=webp&ll&n=-1",
-                                urlencoding::encode(url_without_protocol));
-                            debug!("尝试备用 WebP 服务: {}", fallback_url);
-                            debug!("正在请求备用服务: {}", fallback_url);
                             
-                            bytes = match client.get(&fallback_url).send().await {
+                            // 根据失败原因选择处理方式
+                            let (service_url, service_name) = if bytes.len() > 4_900_000 {
+                                // 文件过大，先尝试 wsrv.nl 有损压缩
+                                let wsrv_lossy_url = format!("https://wsrv.nl/?url={}&output=webp&q=95&n=-1",
+                                    urlencoding::encode(url_without_protocol));
+                                debug!("尝试 wsrv.nl 有损压缩: {}", wsrv_lossy_url);
+                                (wsrv_lossy_url, "wsrv.nl 有损")
+                            } else {
+                                // 文件太小（可能是错误），尝试备用API images.weserv.nl（先无损）
+                                let backup_url = format!("https://images.weserv.nl/?url={}&output=webp&ll&n=-1",
+                                    urlencoding::encode(url_without_protocol));
+                                debug!("尝试备用 API images.weserv.nl 无损: {}", backup_url);
+                                (backup_url, "images.weserv.nl 无损")
+                            };
+                            debug!("正在请求: {}", service_url);
+                            
+                            bytes = match client.get(&service_url).send().await {
                                 Ok(response) => match response.bytes().await {
-                                    Ok(b) if b.len() >= 1000 => {
-                                        debug!("备用 WebP 服务成功: {} bytes", b.len());
+                                    Ok(b) if b.len() >= 1000 && b.len() <= 4_900_000 => {
+                                        debug!("{} 成功: {} bytes", service_name, b.len());
                                         b
                                     },
                                     Ok(b) => {
-                                        warn!("备用 WebP 服务也失败（文件太小: {} bytes），尝试本地转码", b.len());
-                                        // 尝试本地转码
-                                        debug!("开始本地转码，原图URL: {}", url);
-                                        match Self::convert_to_webp_locally_static(&client, &url, &page).await {
-                                            Ok(webp_bytes) => {
-                                                debug!("本地 WebP 转码成功: {} bytes", webp_bytes.len());
-                                                filename = format!("{}.webp", page.hash());
-                                                webp_bytes.into()
+                                        if b.len() < 1000 {
+                                            warn!("{} 失败（文件太小: {} bytes）", service_name, b.len());
+                                        } else {
+                                            warn!("{} 仍然过大（{} bytes > 4.9MB）", service_name, b.len());
+                                        }
+                                        
+                                        // 根据服务名称决定下一步处理
+                                        if service_name == "wsrv.nl 有损" {
+                                            warn!("wsrv.nl 有损压缩失败，尝试备用API images.weserv.nl");
+                                            // wsrv.nl 有损都失败了，备用API也用有损
+                                            let backup_url = format!("https://images.weserv.nl/?url={}&output=webp&q=95&n=-1",
+                                                urlencoding::encode(url_without_protocol));
+                                            debug!("尝试备用 API images.weserv.nl 有损: {}", backup_url);
+                                        } else if service_name == "images.weserv.nl 无损" {
+                                            warn!("images.weserv.nl 无损压缩失败，尝试 images.weserv.nl 有损压缩");
+                                            // images.weserv.nl 无损失败，尝试有损
+                                            let backup_url = format!("https://images.weserv.nl/?url={}&output=webp&q=95&n=-1",
+                                                urlencoding::encode(url_without_protocol));
+                                            debug!("尝试 images.weserv.nl 有损: {}", backup_url);
+                                            
+                                            match client.get(&backup_url).send().await {
+                                                Ok(backup_resp) => match backup_resp.bytes().await {
+                                                    Ok(backup_bytes) if backup_bytes.len() >= 1000 && backup_bytes.len() <= 4_900_000 => {
+                                                        debug!("images.weserv.nl 有损压缩成功: {} bytes", backup_bytes.len());
+                                                        backup_bytes
+                                                    },
+                                                    Ok(backup_bytes) => {
+                                                        warn!("images.weserv.nl 也失败（{} bytes），尝试本地转码", backup_bytes.len());
+                                                        // 进入本地转码逻辑
+                                                        Self::try_local_transcode(&client, &url, &page, &mut filename, suffix).await?
+                                                    },
+                                                    Err(e) => {
+                                                        warn!("images.weserv.nl 请求失败: {}，尝试本地转码", e);
+                                                        Self::try_local_transcode(&client, &url, &page, &mut filename, suffix).await?
+                                                    }
+                                                },
+                                                Err(e) => {
+                                                    warn!("images.weserv.nl 连接失败: {}，尝试本地转码", e);
+                                                    Self::try_local_transcode(&client, &url, &page, &mut filename, suffix).await?
+                                                }
+                                            }
+                                        } else {
+                                            // 不是 wsrv.nl 有损压缩失败，直接进入本地转码
+                                            Self::try_local_transcode(&client, &url, &page, &mut filename, suffix).await?
+                                        }
+                                    },
+                                    Err(e) => {
+                                        warn!("{} 请求失败: {}，尝试本地转码", service_name, e);
+                                        Self::try_local_transcode(&client, &url, &page, &mut filename, suffix).await?
+                                    }
+                                },
+                                Err(e) => {
+                                    warn!("{} 连接失败: {}，尝试本地转码", service_name, e);
+                                    Self::try_local_transcode(&client, &url, &page, &mut filename, suffix).await?
+                                }
+                            };
+                        } else if should_compress {
+                            debug!("已下载: {} (WebP无损, {} bytes)", page.page(), bytes.len());
+                        } else {
+                            debug!("已下载: {} ({}, {} bytes)", page.page(), suffix, bytes.len());
+                        }
+
+                        // 检查并处理本地转码的辅助方法会在后面实现
+                                            Ok((converted_bytes, is_webp)) => {
+                                                debug!("本地转码成功: {} bytes ({})", converted_bytes.len(), 
+                                                       if is_webp { "WebP" } else { "原图" });
+                                                filename = if is_webp {
+                                                    format!("{}.webp", page.hash())
+                                                } else {
+                                                    format!("{}.{}", page.hash(), suffix)
+                                                };
+                                                converted_bytes.into()
                                             },
                                             Err(e) => {
                                                 warn!("本地转码也失败: {}，最终降级使用原图", e);
@@ -577,17 +657,23 @@ impl ExloliUploader {
                                 if !should_compress && suffix != "webp" {
                                     debug!("尝试本地WebP转码后重新上传，原图URL: {}", url);
                                     match Self::convert_to_webp_locally_static(&client, &url, &page).await {
-                                        Ok(webp_bytes) => {
-                                            let webp_filename = format!("{}.webp", page.hash());
-                                            debug!("本地转码成功，尝试上传WebP: {} bytes", webp_bytes.len());
+                                        Ok((converted_bytes, is_webp)) => {
+                                            let final_filename = if is_webp {
+                                                format!("{}.webp", page.hash())
+                                            } else {
+                                                format!("{}.{}", page.hash(), suffix)
+                                            };
+                                            debug!("本地转码成功，尝试上传{}: {} bytes", 
+                                                   if is_webp { "WebP" } else { "原图" }, 
+                                                   converted_bytes.len());
                                             
-                                            match s3_clone.upload(&webp_filename, &mut webp_bytes.as_ref()).await {
-                                                Ok(webp_url) => {
-                                                    debug!("WebP备用上传成功: {}", page.page());
-                                                    webp_url
+                                            match s3_clone.upload(&final_filename, &mut converted_bytes.as_ref()).await {
+                                                Ok(final_url) => {
+                                                    debug!("备用上传成功: {}", page.page());
+                                                    final_url
                                                 },
-                                                Err(webp_e) => {
-                                                    error!("WebP备用上传也失败 {}: {}", page.page(), webp_e);
+                                                Err(backup_e) => {
+                                                    error!("备用上传也失败 {}: {}", page.page(), backup_e);
                                                     return Err(anyhow!("上传图片失败 {}: {}", page.page(), e));
                                                 }
                                             }
@@ -721,8 +807,109 @@ async fn flatten<T>(handle: JoinHandle<Result<T>>) -> Result<T> {
 }
 
 impl ExloliUploader {
+    /// 检查下载的文件是否超过大小限制
+    /// 如果超过限制，尝试用本地转码来压缩
+    async fn check_and_compress_if_needed(
+        client: &Client, 
+        original_url: &str, 
+        downloaded_bytes: Vec<u8>, 
+        page: &EhPageUrl, 
+        max_size: usize
+    ) -> Result<(Vec<u8>, bool)> {
+        if downloaded_bytes.len() <= max_size {
+            debug!("文件大小合适: {} bytes", downloaded_bytes.len());
+            return Ok((downloaded_bytes, false)); // 不是本地转码的WebP
+        }
+        
+        warn!("文件过大: {} bytes > {} bytes，尝试本地压缩", downloaded_bytes.len(), max_size);
+        
+        // 使用智能压缩
+        match Self::smart_webp_compression(&downloaded_bytes, max_size, 85.0).await {
+            Ok(compressed_bytes) => {
+                if compressed_bytes.len() <= max_size {
+                    debug!("本地压缩成功: {} bytes -> {} bytes", downloaded_bytes.len(), compressed_bytes.len());
+                    Ok((compressed_bytes, true)) // 是本地转码的WebP
+                } else {
+                    warn!("本地压缩后仍超限制，使用原文件");
+                    Ok((downloaded_bytes, false))
+                }
+            },
+            Err(e) => {
+                warn!("本地压缩失败: {}，使用原文件", e);
+                Ok((downloaded_bytes, false))
+            }
+        }
+    }
+
+    /// 尝试本地转码的辅助方法
+    async fn try_local_transcode(
+        client: &Client,
+        url: &str,
+        page: &EhPageUrl,
+        filename: &mut String,
+        suffix: &str,
+    ) -> Result<bytes::Bytes> {
+        debug!("开始本地转码，原图URL: {}", url);
+        match Self::convert_to_webp_locally_static(client, url, page).await {
+            Ok((converted_bytes, is_webp)) => {
+                debug!("本地转码成功: {} bytes ({})", converted_bytes.len(), 
+                       if is_webp { "WebP" } else { "原图" });
+                *filename = if is_webp {
+                    format!("{}.webp", page.hash())
+                } else {
+                    format!("{}.{}", page.hash(), suffix)
+                };
+                Ok(converted_bytes.into())
+            },
+            Err(e) => {
+                warn!("本地转码也失败: {}，最终降级使用原图", e);
+                // 最终降级使用原图
+                *filename = format!("{}.{}", page.hash(), suffix);
+                match client.get(url).send().await {
+                    Ok(resp) => match resp.bytes().await {
+                        Ok(orig_bytes) => Ok(orig_bytes),
+                        Err(e) => Err(anyhow!("下载原图失败: {}", e))
+                    },
+                    Err(e) => Err(anyhow!("请求原图失败: {}", e))
+                }
+            }
+        }
+    }
+
+    /// 检查文件大小并进行智能 WebP 压缩
+    /// 目前使用无损压缩
+    async fn smart_webp_compression(original_bytes: &[u8], _max_size: usize, _quality: f32) -> Result<Vec<u8>> {
+        debug!("开始 WebP 无损压缩: {} bytes", original_bytes.len());
+        
+        // 检测图片格式
+        let format = image::guess_format(original_bytes)
+            .map_err(|e| anyhow!("无法识别图片格式: {}", e))?;
+            
+        // 如果已经是 WebP，直接返回
+        if format == ImageFormat::WebP {
+            debug!("图片已经是 WebP 格式，直接返回");
+            return Ok(original_bytes.to_vec());
+        }
+        
+        // 解码原图
+        let img = image::load_from_memory(original_bytes)
+            .map_err(|e| anyhow!("解码图片失败: {}", e))?;
+        
+        let mut webp_bytes = Vec::new();
+        
+        // 使用无损压缩
+        debug!("使用无损 WebP 压缩");
+        let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut webp_bytes);
+        encoder.encode(&img.to_rgba8(), img.width(), img.height(), image::ColorType::Rgba8.into())
+            .map_err(|e| anyhow!("WebP 编码失败: {}", e))?;
+        
+        debug!("WebP 压缩完成: {} bytes -> {} bytes", original_bytes.len(), webp_bytes.len());
+        Ok(webp_bytes)
+    }
+
     /// 静态方法：本地 WebP 转码
-    async fn convert_to_webp_locally_static(client: &Client, url: &str, page: &EhPageUrl) -> Result<Vec<u8>> {
+    /// 返回 (数据, 是否为WebP格式)
+    async fn convert_to_webp_locally_static(client: &Client, url: &str, page: &EhPageUrl) -> Result<(Vec<u8>, bool)> {
         debug!("开始本地 WebP 转码: 页面 {}", page.page());
         
         // 下载原图
@@ -733,32 +920,25 @@ impl ExloliUploader {
             
         debug!("原图下载完成: {} bytes", original_bytes.len());
         
-        // 检测图片格式
-        let format = image::guess_format(&original_bytes)
-            .map_err(|e| anyhow!("无法识别图片格式: {}", e))?;
-            
-        // 如果已经是 WebP，直接返回
-        if format == ImageFormat::WebP {
-            debug!("图片已经是 WebP 格式，直接返回");
-            return Ok(original_bytes.to_vec());
+        const MAX_FILE_SIZE: usize = 4_900_000; // 4.9MB
+        
+        // 使用智能 WebP 压缩
+        match Self::smart_webp_compression(&original_bytes, MAX_FILE_SIZE, 85.0).await {
+            Ok(webp_bytes) => {
+                // 如果转码后反而变大或者仍然超过限制，返回原图数据
+                if webp_bytes.len() >= original_bytes.len() || webp_bytes.len() > MAX_FILE_SIZE {
+                    warn!("WebP 转码后文件变大或仍超限制 ({} -> {} bytes)，使用原图", 
+                          original_bytes.len(), webp_bytes.len());
+                    Ok((original_bytes.to_vec(), false)) // 返回原图，非WebP
+                } else {
+                    Ok((webp_bytes, true)) // 返回WebP数据
+                }
+            },
+            Err(e) => {
+                warn!("WebP 转码失败: {}，使用原图", e);
+                Ok((original_bytes.to_vec(), false)) // 转码失败，返回原图
+            }
         }
-        
-        // 解码原图
-        let img = image::load_from_memory(&original_bytes)
-            .map_err(|e| anyhow!("解码图片失败: {}", e))?;
-            
-        // 编码为 WebP（无损）
-        let mut webp_bytes = Vec::new();
-        
-        // 使用 image crate 的 WebP 编码器
-        let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut webp_bytes);
-        encoder.encode(&img.to_rgba8(), img.width(), img.height(), image::ColorType::Rgba8.into())
-            .map_err(|e| anyhow!("WebP 编码失败: {}", e))?;
-            
-        debug!("本地 WebP 转码完成: {} bytes -> {} bytes", 
-               original_bytes.len(), webp_bytes.len());
-               
-        Ok(webp_bytes)
     }
 
     /// 重新扫描并上传没有上传过但存在记录的画廊
