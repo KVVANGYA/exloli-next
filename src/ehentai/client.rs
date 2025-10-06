@@ -227,14 +227,6 @@ impl EhClient {
             debug!("响应状态: {:?}", resp.status());
             debug!("响应URL: {}", resp.url());
             
-            // 检查响应头
-            debug!("响应头: {:?}", resp.headers());
-            
-            // 检查响应中的set-cookie头
-            if let Some(cookie_headers) = resp.headers().get_all("set-cookie").iter().next() {
-                debug!("响应返回的 set-cookie 头: {:?}", cookie_headers);
-            }
-            
             // 检查是否有重定向到首页或其他非画廊页面
             let final_url = resp.url().as_str();
             if final_url != &request_url {
@@ -251,8 +243,17 @@ impl EhClient {
             let bytes = resp.bytes().await?;
             debug!("响应字节长度: {}", bytes.len());
             
+            // 检查响应头
+            let headers = resp.headers();
+            debug!("响应头: {:?}", headers);
+            
+            // 检查响应中的set-cookie头
+            if let Some(cookie_headers) = headers.get_all("set-cookie").iter().next() {
+                debug!("响应返回的 set-cookie 头: {:?}", cookie_headers);
+            }
+            
             // 检查内容编码并尝试解压
-            let content = if let Some(encoding) = resp.headers().get("content-encoding") {
+            let content = if let Some(encoding) = headers.get("content-encoding") {
                 let encoding_str = encoding.to_str().unwrap_or("");
                 debug!("内容编码: {}", encoding_str);
                 
