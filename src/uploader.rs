@@ -347,7 +347,7 @@ impl ExloliUploader {
                         let suffix = url.split('.').last().unwrap_or("jpg");
 
                         // 先获取 Content-Length 检查文件大小
-                        let (should_compress, _file_size) = match client.head(&url).send().await {
+                        let (should_compress, original_file_size) = match client.head(&url).send().await {
                             Ok(response) => {
                                 if let Some(content_length) = response.headers().get("content-length") {
                                     if let Ok(size_str) = content_length.to_str() {
@@ -475,7 +475,44 @@ impl ExloliUploader {
                         };
 
                         // 检查 WebP 压缩结果或网络请求失败
-                        if should_compress && (request_failed || bytes.len() < 1000 || bytes.len() > 4_900_000) {
+                        // 如果压缩成功但文件变大，检查是否应该使用原图
+                        let mut use_original_instead = false;
+                        if should_compress && !request_failed && bytes.len() >= 1000 && bytes.len() <= 4_900_000 {
+                            // 压缩成功且大小合理，但需要检查是否比原图更大
+                            if original_file_size > 0 && bytes.len() > original_file_size && original_file_size <= 4_900_000 {
+                                warn!("WebP压缩后文件变大 ({} bytes -> {} bytes)，且原图 < 4.9MB，使用原图", original_file_size, bytes.len());
+                                use_original_instead = true;
+                            }
+                        }
+                        
+                        if use_original_instead {
+                            // 下载原图
+                            debug!("下载原图替代压缩版本: {}", url);
+                            bytes = match client.get(&url).send().await {
+                                Ok(response) => {
+                                    if response.status().is_success() {
+                                        match response.bytes().await {
+                                            Ok(original_bytes) => {
+                                                debug!("原图下载成功: {} bytes", original_bytes.len());
+                                                filename = format!("{}.{}", page.hash(), suffix);
+                                                original_bytes
+                                            },
+                                            Err(e) => {
+                                                warn!("原图下载失败: {}，继续使用压缩版本", e);
+                                                bytes // 保持压缩版本
+                                            }
+                                        }
+                                    } else {
+                                        warn!("原图请求失败: {}，继续使用压缩版本", response.status());
+                                        bytes // 保持压缩版本
+                                    }
+                                },
+                                Err(e) => {
+                                    warn!("原图请求失败: {}，继续使用压缩版本", e);
+                                    bytes // 保持压缩版本
+                                }
+                            };
+                        } else if should_compress && (request_failed || bytes.len() < 1000 || bytes.len() > 4_900_000) {
                             if request_failed {
                                 warn!("images.weserv.nl 网络请求失败，尝试备用API");
                             } else if bytes.len() < 1000 {
