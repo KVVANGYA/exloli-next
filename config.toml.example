@@ -8,6 +8,7 @@ interval = "1h"
 # 数据库文件位置
 database_url = "db.sqlite"
 # API 请求超时时间 (默认: 30s)
+# 由于图片转码需要一定时间，建议设置为 60s 或更长
 api_timeout = "60s"
 
 [exhentai]
