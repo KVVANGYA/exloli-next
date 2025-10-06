@@ -5,6 +5,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use reqwest::header::*;
 use reqwest::Client;
+use reqwest::cookie::Cookie;
 use scraper::{Html, Selector};
 use serde::Serialize;
 use std::fmt::Debug;
@@ -46,7 +47,7 @@ impl EhClient {
         // 将 cookie 日志级别改为 debug，避免在生产环境泄露敏感信息
         debug!("初始 cookie: {}", cookie);
         
-        // 设置请求头
+        // 设置请求头（不包括COOKIE，让reqwest自动管理cookie）
         let final_headers = headers! {
             ACCEPT => "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
             ACCEPT_ENCODING => "gzip, deflate, br, zstd", 
@@ -54,7 +55,6 @@ impl EhClient {
             CACHE_CONTROL => "no-cache",
             PRAGMA => "no-cache",
             REFERER => "https://exhentai.org/",
-            COOKIE => cookie,
             UPGRADE_INSECURE_REQUESTS => "1",
             USER_AGENT => "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0"
         };
@@ -66,6 +66,15 @@ impl EhClient {
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(30))
             .build()?;
+
+        // 手动设置初始cookie
+        // 解析cookie字符串并添加到cookie store中
+        let url = "https://exhentai.org/".parse::<reqwest::Url>().unwrap();
+        for cookie_str in cookie.split("; ") {
+            if let Ok(cookie) = reqwest::cookie::Cookie::parse(cookie_str, &url) {
+                client.cookie_store().unwrap().insert_cookie(cookie, &url);
+            }
+        }
 
         Ok(Self(client))
     }

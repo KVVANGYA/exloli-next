@@ -158,6 +158,9 @@ impl ChallengeProvider {
             }
             let answer = &challenge[0];
             let url = answer.url.clone();
+            // 这些请求是获取图片的，可能需要携带E站cookie
+            // 但由于这是独立的工具函数，无法直接访问EhClient
+            // 如果遇到权限问题，应该通过ExloliUploader传递EhClient
             let resp = reqwest::get(&url).await?;
             let data = resp.bytes().await?;
             if has_qrcode(&data)? {

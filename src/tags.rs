@@ -57,6 +57,7 @@ impl EhTagTransDB {
     async fn update(&self) -> Result<()> {
         info!("更新 tag 中……");
         // 此处得设置 user-agent，否则 github 会 403
+        // 这些请求是发往GitHub的，不需要E站的cookie
         let client = reqwest::Client::builder().user_agent("exloli").build()?;
         let resp = client
             .get("https://api.github.com/repos/EhTagTranslation/Database/releases/latest")

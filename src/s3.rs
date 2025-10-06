@@ -13,6 +13,7 @@ pub struct S3Uploader {
 
 impl S3Uploader {
     pub fn new(gateway_host: String, gateway_date: String, teletype_token: Option<String>) -> Result<Self> {
+        // 这些请求是发往第三方服务的，不需要E站的cookie
         let client = Client::new();
         Ok(Self { client, gateway_host, gateway_date, teletype_token })
     }

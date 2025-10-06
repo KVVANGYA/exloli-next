@@ -325,10 +325,8 @@ impl ExloliUploader {
             let callback_clone = callback_arc.clone();
             let s3_clone = s3.clone();
             
-            let client = Client::builder()
-                .timeout(Duration::from_secs(60))  // 增加到60秒，因为API转码需要较长时间
-                .connect_timeout(Duration::from_secs(30))
-                .build()?;
+            // 使用EhClient而不是创建新的Client，以确保携带正确的cookie
+            let client = self.ehentai.0.clone(); // 获取内部的reqwest::Client
             
             let handle = tokio::spawn(
                 async move {
