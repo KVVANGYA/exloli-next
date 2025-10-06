@@ -352,7 +352,7 @@ impl ExloliUploader {
                                 if let Some(content_length) = response.headers().get("content-length") {
                                     if let Ok(size_str) = content_length.to_str() {
                                         if let Ok(size) = size_str.parse::<usize>() {
-                                            let should_compress = size > 1_000_000; // 超过 1MB
+                                            let should_compress = size > 2_000_000; // 超过 2MB
                                             debug!("图片 {} HEAD 请求成功，大小 {} bytes", page.page(), size);
                                             if should_compress {
                                                 debug!("图片 {} 大小 {} bytes，使用 WebP 压缩", page.page(), size);
@@ -378,18 +378,25 @@ impl ExloliUploader {
                         };
 
                         // 根据文件大小决定是否使用 WebP 压缩
-                        // 使用 ll 参数启用无损压缩，&n=-1 保留 GIF 所有帧
                         let (download_url, mut filename) = if should_compress {
-                            // 去掉协议头（https:// 或 http://）
-                            let url_without_protocol = url
-                                .strip_prefix("https://")
-                                .or_else(|| url.strip_prefix("http://"))
-                                .unwrap_or(&url);
+                            // 检测是否为JPG格式，避免无损压缩导致API超时
+                            let is_jpg = suffix.to_lowercase() == "jpg" || suffix.to_lowercase() == "jpeg";
                             
-                            // 总是先尝试无损压缩
-                            let webp_url = format!("https://wsrv.nl/?url={}&output=webp&ll&n=-1",
-                                urlencoding::encode(url_without_protocol));
-                            debug!("使用WebP无损压缩服务下载图片: {}", webp_url);
+                            let webp_url = if is_jpg {
+                                // JPG格式直接使用质量100的有损压缩，避免API超时
+                                format!("https://wsrv.nl/?url={}&output=webp&q=100&n=-1",
+                                    urlencoding::encode(&url))
+                            } else {
+                                // 其他格式使用无损压缩
+                                format!("https://wsrv.nl/?url={}&output=webp&ll&n=-1",
+                                    urlencoding::encode(&url))
+                            };
+                            
+                            if is_jpg {
+                                debug!("使用WebP质量100压缩服务下载JPG图片: {}", webp_url);
+                            } else {
+                                debug!("使用WebP无损压缩服务下载图片: {}", webp_url);
+                            }
                             (webp_url, format!("{}.webp", page.hash()))
                         } else {
                             (url.clone(), format!("{}.{}", page.hash(), suffix))
@@ -402,36 +409,73 @@ impl ExloliUploader {
                                 let status = response.status();
                                 debug!("图片 {} 响应状态: {}", page.page(), status);
                                 
-                                // 检查 H@H 节点是否返回错误状态码
+                                // 检查响应状态码
                                 if !status.is_success() {
                                     if download_url.contains("hath.network") {
                                         error!("H@H 节点返回错误状态 {}: 所属的H@H节点异常，请稍后重试 (URL: {})", status, download_url);
                                         return Err(anyhow!("所属的H@H节点异常，请稍后重试 (状态码: {}, URL: {})", status, download_url));
+                                    } else if status.as_u16() == 504 && should_compress {
+                                        // 504 Gateway Timeout，可能是无损压缩导致的超时，尝试有损压缩质量100
+                                        warn!("压缩服务返回504超时，尝试有损压缩质量100重试: {}", download_url);
+                                        
+                                        let fallback_url = if download_url.contains("wsrv.nl") {
+                                            format!("https://wsrv.nl/?url={}&output=webp&q=100&n=-1",
+                                                urlencoding::encode(&url))
+                                        } else {
+                                            format!("https://images.weserv.nl/?url={}&output=webp&q=100&n=-1",
+                                                urlencoding::encode(&url))
+                                        };
+                                        
+                                        debug!("504超时重试URL: {}", fallback_url);
+                                        // 立即重试质量100的压缩
+                                        match client.get(&fallback_url).send().await {
+                                            Ok(retry_resp) => {
+                                                if retry_resp.status().is_success() {
+                                                    match retry_resp.bytes().await {
+                                                        Ok(retry_bytes) => {
+                                                            debug!("504重试成功: {} bytes", retry_bytes.len());
+                                                            retry_bytes
+                                                        }
+                                                        Err(e) => {
+                                                            warn!("504重试读取响应失败: {}，进入后续处理", e);
+                                                            vec![].into() // 让后续逻辑处理
+                                                        }
+                                                    }
+                                                } else {
+                                                    warn!("504重试仍然失败，状态码: {}，进入后续处理", retry_resp.status());
+                                                    vec![].into() // 让后续逻辑处理
+                                                }
+                                            }
+                                            Err(e) => {
+                                                warn!("504重试请求失败: {}，进入后续处理", e);
+                                                vec![].into() // 让后续逻辑处理
+                                            }
+                                        }
                                     } else {
                                         error!("请求失败，状态码: {} (URL: {})", status, download_url);
                                         return Err(anyhow!("请求失败，状态码: {} (URL: {})", status, download_url));
                                     }
-                                }
-                                
-                                match response.bytes().await {
-                                    Ok(bytes) => {
-                                        debug!("图片 {} 下载完成: {} bytes", page.page(), bytes.len());
-                                        
-                                        // 检查是否是 H@H 错误响应（通常很小且包含错误信息）
-                                        if download_url.contains("hath.network") && bytes.len() < 100 {
-                                            let content = String::from_utf8_lossy(&bytes);
-                                            warn!("H@H 节点可能返回错误响应: {} bytes, 内容: {:?}", bytes.len(), content);
-                                            if content.contains("error") || content.contains("Error") || bytes.len() < 50 {
-                                                error!("所属的H@H节点异常，请稍后重试 (状态码: {}, URL: {})", status, download_url);
-                                                return Err(anyhow!("所属的H@H节点异常，请稍后重试 (状态码: {}, URL: {})", status, download_url));
+                                } else {
+                                    match response.bytes().await {
+                                        Ok(bytes) => {
+                                            debug!("图片 {} 下载完成: {} bytes", page.page(), bytes.len());
+                                            
+                                            // 检查是否是 H@H 错误响应（通常很小且包含错误信息）
+                                            if download_url.contains("hath.network") && bytes.len() < 100 {
+                                                let content = String::from_utf8_lossy(&bytes);
+                                                warn!("H@H 节点可能返回错误响应: {} bytes, 内容: {:?}", bytes.len(), content);
+                                                if content.contains("error") || content.contains("Error") || bytes.len() < 50 {
+                                                    error!("所属的H@H节点异常，请稍后重试 (状态码: {}, URL: {})", status, download_url);
+                                                    return Err(anyhow!("所属的H@H节点异常，请稍后重试 (状态码: {}, URL: {})", status, download_url));
+                                                }
                                             }
+                                            
+                                            bytes
+                                        },
+                                        Err(e) => {
+                                            error!("下载图片失败 {}: {}", page.page(), e);
+                                            return Err(anyhow!("下载图片失败 {}: {}", page.page(), e));
                                         }
-                                        
-                                        bytes
-                                    },
-                                    Err(e) => {
-                                        error!("下载图片失败 {}: {}", page.page(), e);
-                                        return Err(anyhow!("下载图片失败 {}: {}", page.page(), e));
                                     }
                                 }
                             },
@@ -458,15 +502,23 @@ impl ExloliUploader {
                             let (service_url, service_name) = if bytes.len() > 4_900_000 {
                                 // 文件过大，先尝试 wsrv.nl 有损压缩
                                 let wsrv_lossy_url = format!("https://wsrv.nl/?url={}&output=webp&q=95&n=-1",
-                                    urlencoding::encode(url_without_protocol));
+                                    urlencoding::encode(&url));
                                 debug!("尝试 wsrv.nl 有损压缩: {}", wsrv_lossy_url);
                                 (wsrv_lossy_url, "wsrv.nl 有损")
                             } else {
-                                // 文件太小（可能是错误），尝试备用API images.weserv.nl（先无损）
-                                let backup_url = format!("https://images.weserv.nl/?url={}&output=webp&ll&n=-1",
-                                    urlencoding::encode(url_without_protocol));
-                                debug!("尝试备用 API images.weserv.nl 无损: {}", backup_url);
-                                (backup_url, "images.weserv.nl 无损")
+                                // 文件太小（可能是错误），尝试备用API images.weserv.nl
+                                // 检测JPG格式避免无损压缩导致超时
+                                let is_jpg = suffix.to_lowercase() == "jpg" || suffix.to_lowercase() == "jpeg";
+                                let backup_url = if is_jpg {
+                                    format!("https://images.weserv.nl/?url={}&output=webp&q=100&n=-1",
+                                        urlencoding::encode(&url))
+                                } else {
+                                    format!("https://images.weserv.nl/?url={}&output=webp&ll&n=-1",
+                                        urlencoding::encode(&url))
+                                };
+                                let service_name = if is_jpg { "images.weserv.nl 质量100" } else { "images.weserv.nl 无损" };
+                                debug!("尝试备用 API {}: {}", service_name, backup_url);
+                                (backup_url, service_name)
                             };
                             debug!("正在请求: {}", service_url);
                             
@@ -488,7 +540,7 @@ impl ExloliUploader {
                                             warn!("wsrv.nl 有损压缩失败，尝试备用API images.weserv.nl");
                                             // wsrv.nl 有损都失败了，备用API也用有损
                                             let backup_url = format!("https://images.weserv.nl/?url={}&output=webp&q=95&n=-1",
-                                                urlencoding::encode(url_without_protocol));
+                                                urlencoding::encode(&url));
                                             debug!("尝试备用 API images.weserv.nl 有损: {}", backup_url);
                                             
                                             match client.get(&backup_url).send().await {
@@ -515,8 +567,36 @@ impl ExloliUploader {
                                             warn!("images.weserv.nl 无损压缩失败，尝试 images.weserv.nl 有损压缩");
                                             // images.weserv.nl 无损失败，尝试有损
                                             let backup_url = format!("https://images.weserv.nl/?url={}&output=webp&q=95&n=-1",
-                                                urlencoding::encode(url_without_protocol));
+                                                urlencoding::encode(&url));
                                             debug!("尝试 images.weserv.nl 有损: {}", backup_url);
+                                            
+                                            match client.get(&backup_url).send().await {
+                                                Ok(backup_resp) => match backup_resp.bytes().await {
+                                                    Ok(backup_bytes) if backup_bytes.len() >= 1000 && backup_bytes.len() <= 4_900_000 => {
+                                                        debug!("images.weserv.nl 有损压缩成功: {} bytes", backup_bytes.len());
+                                                        backup_bytes
+                                                    },
+                                                    Ok(backup_bytes) => {
+                                                        warn!("images.weserv.nl 也失败（{} bytes），尝试本地转码", backup_bytes.len());
+                                                        // 进入本地转码逻辑
+                                                        Self::try_local_transcode(&client, &url, &page, &mut filename, suffix).await?.into()
+                                                    },
+                                                    Err(e) => {
+                                                        warn!("images.weserv.nl 请求失败: {}，尝试本地转码", e);
+                                                        Self::try_local_transcode(&client, &url, &page, &mut filename, suffix).await?.into()
+                                                    }
+                                                },
+                                                Err(e) => {
+                                                    warn!("images.weserv.nl 连接失败: {}，尝试本地转码", e);
+                                                    Self::try_local_transcode(&client, &url, &page, &mut filename, suffix).await?.into()
+                                                }
+                                            }
+                                        } else if service_name == "images.weserv.nl 质量100" {
+                                            warn!("images.weserv.nl JPG质量100压缩失败，尝试质量95压缩");
+                                            // JPG质量100失败，尝试质量95
+                                            let backup_url = format!("https://images.weserv.nl/?url={}&output=webp&q=95&n=-1",
+                                                urlencoding::encode(&url));
+                                            debug!("尝试 images.weserv.nl JPG质量95: {}", backup_url);
                                             
                                             match client.get(&backup_url).send().await {
                                                 Ok(backup_resp) => match backup_resp.bytes().await {
