@@ -46,53 +46,7 @@ impl EhClient {
         // 将 cookie 日志级别改为 debug，避免在生产环境泄露敏感信息
         debug!("初始 cookie: {}", cookie);
         
-        // 创建一个带 cookie store 的客户端用于初始化
-        let init_client = Client::builder()
-            .cookie_store(true)
-            .timeout(Duration::from_secs(30))
-            .connect_timeout(Duration::from_secs(30))
-            .build()?;
-
-        // 手动设置cookie头部
-        let cookie_value = HeaderValue::from_str(cookie).map_err(|e| anyhow::anyhow!("Invalid cookie: {}", e))?;
-        let mut headers = HeaderMap::new();
-        headers.insert(COOKIE, cookie_value);
-        
-        // 设置其他必要的请求头
-        headers.insert(ACCEPT, HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"));
-        headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6"));
-        headers.insert(REFERER, HeaderValue::from_static("https://exhentai.org/"));
-        headers.insert(USER_AGENT, HeaderValue::from_static("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0"));
-
-        // 获取必要的 cookie
-        debug!("访问 uconfig.php");
-        let uconfig_url = "https://exhentai.org/uconfig.php";
-        debug!("发送请求: {}", uconfig_url);
-        let resp1 = send!(init_client.get(uconfig_url).headers(headers.clone()))?;
-        debug!("uconfig.php 响应状态: {:?}", resp1.status());
-        debug!("uconfig.php 响应URL: {}", resp1.url());
-        
-        // 检查uconfig.php响应中的set-cookie头
-        if let Some(cookie_headers) = resp1.headers().get_all("set-cookie").iter().next() {
-            debug!("uconfig.php 返回的 set-cookie 头: {:?}", cookie_headers);
-        }
-        
-        debug!("访问 mytags");
-        let mytags_url = "https://exhentai.org/mytags";
-        debug!("发送请求: {}", mytags_url);
-        let resp2 = send!(init_client.get(mytags_url).headers(headers))?;
-        debug!("mytags 响应状态: {:?}", resp2.status());
-        debug!("mytags 响应URL: {}", resp2.url());
-        
-        // 检查mytags响应中的set-cookie头
-        if let Some(cookie_headers) = resp2.headers().get_all("set-cookie").iter().next() {
-            debug!("mytags 返回的 set-cookie 头: {:?}", cookie_headers);
-        }
-        
-        let mytags_content = resp2.text().await?;
-        debug!("mytags 响应长度: {}", mytags_content.len());
-
-        // 设置最终使用的默认头部，但不包括COOKIE，因为cookie应该由cookie store管理
+        // 设置请求头
         let final_headers = headers! {
             ACCEPT => "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
             ACCEPT_ENCODING => "gzip, deflate, br, zstd", 
@@ -100,11 +54,12 @@ impl EhClient {
             CACHE_CONTROL => "no-cache",
             PRAGMA => "no-cache",
             REFERER => "https://exhentai.org/",
+            COOKIE => cookie,
             UPGRADE_INSECURE_REQUESTS => "1",
             USER_AGENT => "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0"
         };
 
-        // 使用相同的cookie store创建最终客户端
+        // 创建客户端
         let client = Client::builder()
             .cookie_store(true)
             .default_headers(final_headers)
