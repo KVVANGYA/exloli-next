@@ -877,9 +877,10 @@ impl ExloliUploader {
     }
 
     /// 检查文件大小并进行智能 WebP 压缩
-    /// 目前使用无损压缩
-    async fn smart_webp_compression(original_bytes: &[u8], _max_size: usize, _quality: f32) -> Result<Vec<u8>> {
-        debug!("开始 WebP 无损压缩: {} bytes", original_bytes.len());
+    /// lossy: true=有损压缩, false=无损压缩
+    async fn smart_webp_compression(original_bytes: &[u8], _max_size: usize, quality: f32, lossy: bool) -> Result<Vec<u8>> {
+        let compression_type = if lossy { "有损" } else { "无损" };
+        debug!("开始 WebP {} 压缩: {} bytes", compression_type, original_bytes.len());
         
         // 检测图片格式
         let format = image::guess_format(original_bytes)
@@ -897,13 +898,21 @@ impl ExloliUploader {
         
         let mut webp_bytes = Vec::new();
         
-        // 使用无损压缩
-        debug!("使用无损 WebP 压缩");
-        let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut webp_bytes);
-        encoder.encode(&img.to_rgba8(), img.width(), img.height(), image::ColorType::Rgba8.into())
-            .map_err(|e| anyhow!("WebP 编码失败: {}", e))?;
+        if lossy && quality > 0.0 {
+            // TODO: 有损压缩支持（当前 image crate 可能不支持，降级到无损）
+            warn!("有损 WebP 压缩暂不支持，降级使用无损压缩");
+            let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut webp_bytes);
+            encoder.encode(&img.to_rgba8(), img.width(), img.height(), image::ColorType::Rgba8.into())
+                .map_err(|e| anyhow!("WebP 编码失败: {}", e))?;
+        } else {
+            // 使用无损压缩
+            debug!("使用无损 WebP 压缩");
+            let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut webp_bytes);
+            encoder.encode(&img.to_rgba8(), img.width(), img.height(), image::ColorType::Rgba8.into())
+                .map_err(|e| anyhow!("WebP 编码失败: {}", e))?;
+        }
         
-        debug!("WebP 压缩完成: {} bytes -> {} bytes", original_bytes.len(), webp_bytes.len());
+        debug!("WebP {} 压缩完成: {} bytes -> {} bytes", compression_type, original_bytes.len(), webp_bytes.len());
         Ok(webp_bytes)
     }
 
@@ -922,21 +931,85 @@ impl ExloliUploader {
         
         const MAX_FILE_SIZE: usize = 4_900_000; // 4.9MB
         
-        // 使用智能 WebP 压缩
-        match Self::smart_webp_compression(&original_bytes, MAX_FILE_SIZE, 85.0).await {
-            Ok(webp_bytes) => {
-                // 如果转码后反而变大或者仍然超过限制，返回原图数据
-                if webp_bytes.len() >= original_bytes.len() || webp_bytes.len() > MAX_FILE_SIZE {
-                    warn!("WebP 转码后文件变大或仍超限制 ({} -> {} bytes)，使用原图", 
-                          original_bytes.len(), webp_bytes.len());
-                    Ok((original_bytes.to_vec(), false)) // 返回原图，非WebP
+        // 先尝试无损 WebP 压缩
+        match Self::smart_webp_compression(&original_bytes, MAX_FILE_SIZE, 0.0, false).await {
+            Ok(lossless_bytes) => {
+                debug!("本地无损 WebP 转码完成: {} bytes -> {} bytes", 
+                       original_bytes.len(), lossless_bytes.len());
+                
+                // 检查无损压缩结果
+                if lossless_bytes.len() <= MAX_FILE_SIZE && lossless_bytes.len() < original_bytes.len() {
+                    debug!("本地无损压缩成功且符合大小限制");
+                    Ok((lossless_bytes, true)) // 返回无损WebP
+                } else if lossless_bytes.len() > MAX_FILE_SIZE {
+                    warn!("本地无损压缩过大 ({} bytes > 4.9MB)，尝试有损压缩", lossless_bytes.len());
+                    
+                    // 尝试有损压缩
+                    match Self::smart_webp_compression(&original_bytes, MAX_FILE_SIZE, 95.0, true).await {
+                        Ok(lossy_bytes) => {
+                            debug!("本地有损 WebP 转码完成: {} bytes -> {} bytes", 
+                                   original_bytes.len(), lossy_bytes.len());
+                            
+                            if lossy_bytes.len() <= MAX_FILE_SIZE && lossy_bytes.len() < original_bytes.len() {
+                                debug!("本地有损压缩成功且符合大小限制");
+                                Ok((lossy_bytes, true)) // 返回有损WebP
+                            } else {
+                                error!("本地有损压缩仍超限制或变大 ({} bytes)，转码失败", lossy_bytes.len());
+                                Err(anyhow!("本地有损压缩失败，文件大小仍不符合要求: {} bytes", lossy_bytes.len()))
+                            }
+                        },
+                        Err(e) => {
+                            error!("本地有损转码失败: {}，转码终止", e);
+                            Err(anyhow!("本地有损压缩失败: {}", e))
+                        }
+                    }
                 } else {
-                    Ok((webp_bytes, true)) // 返回WebP数据
+                    warn!("本地无损压缩后文件变大 ({} -> {} bytes)，尝试有损压缩", 
+                          original_bytes.len(), lossless_bytes.len());
+                    
+                    // 无损压缩变大，尝试有损压缩
+                    match Self::smart_webp_compression(&original_bytes, MAX_FILE_SIZE, 95.0, true).await {
+                        Ok(lossy_bytes) => {
+                            debug!("本地有损 WebP 转码完成: {} bytes -> {} bytes", 
+                                   original_bytes.len(), lossy_bytes.len());
+                            
+                            if lossy_bytes.len() <= MAX_FILE_SIZE && lossy_bytes.len() < original_bytes.len() {
+                                debug!("本地有损压缩成功且符合大小限制");
+                                Ok((lossy_bytes, true)) // 返回有损WebP
+                            } else {
+                                error!("本地有损压缩仍不理想 ({} bytes)，转码失败", lossy_bytes.len());
+                                Err(anyhow!("本地压缩失败，无法满足大小要求"))
+                            }
+                        },
+                        Err(e) => {
+                            error!("本地有损转码失败: {}，转码终止", e);
+                            Err(anyhow!("本地有损压缩失败: {}", e))
+                        }
+                    }
                 }
             },
             Err(e) => {
-                warn!("WebP 转码失败: {}，使用原图", e);
-                Ok((original_bytes.to_vec(), false)) // 转码失败，返回原图
+                warn!("本地无损转码失败: {}，尝试有损压缩", e);
+                
+                // 无损失败，尝试有损
+                match Self::smart_webp_compression(&original_bytes, MAX_FILE_SIZE, 95.0, true).await {
+                    Ok(lossy_bytes) => {
+                        debug!("本地有损 WebP 转码完成: {} bytes -> {} bytes", 
+                               original_bytes.len(), lossy_bytes.len());
+                        
+                        if lossy_bytes.len() <= MAX_FILE_SIZE && lossy_bytes.len() < original_bytes.len() {
+                            debug!("本地有损压缩成功");
+                            Ok((lossy_bytes, true)) // 返回有损WebP
+                        } else {
+                            error!("本地有损压缩也不理想 ({} bytes)，转码失败", lossy_bytes.len());
+                            Err(anyhow!("本地有损压缩失败，无法满足大小要求: {} bytes", lossy_bytes.len()))
+                        }
+                    },
+                    Err(e2) => {
+                        error!("本地有损转码也失败: {}，转码终止", e2);
+                        Err(anyhow!("本地有损压缩失败: {}", e2))
+                    }
+                }
             }
         }
     }
