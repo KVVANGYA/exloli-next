@@ -395,6 +395,7 @@ impl ExloliUploader {
                         };
 
                         // 下载图片
+                        debug!("正在请求下载: {}", download_url);
                         let mut bytes = match client.get(&download_url).send().await {
                             Ok(response) => match response.bytes().await {
                                 Ok(bytes) => bytes,
@@ -417,6 +418,7 @@ impl ExloliUploader {
                             let fallback_url = format!("https://images.weserv.nl/?url={}&output=webp&ll&n=-1",
                                 urlencoding::encode(&url));
                             debug!("尝试备用 WebP 服务: {}", fallback_url);
+                            debug!("正在请求备用服务: {}", fallback_url);
                             
                             bytes = match client.get(&fallback_url).send().await {
                                 Ok(response) => match response.bytes().await {
@@ -427,6 +429,7 @@ impl ExloliUploader {
                                     Ok(b) => {
                                         warn!("备用 WebP 服务也失败（文件太小: {} bytes），尝试本地转码", b.len());
                                         // 尝试本地转码
+                                        debug!("开始本地转码，原图URL: {}", url);
                                         match Self::convert_to_webp_locally_static(&client, &url, &page).await {
                                             Ok(webp_bytes) => {
                                                 debug!("本地 WebP 转码成功: {} bytes", webp_bytes.len());
