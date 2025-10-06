@@ -342,12 +342,8 @@ impl ExloliUploader {
                         
                         // 获取信号量许可，控制并发
                         let _permit = sem.acquire().await.unwrap();
-                        
-                        // 跳过 GIF 文件
+
                         let suffix = url.split('.').last().unwrap_or("jpg");
-                        if suffix == "gif" {
-                            continue;
-                        }
 
                         // 先获取 Content-Length 检查文件大小
                         let should_compress = match client.head(&url).send().await {
