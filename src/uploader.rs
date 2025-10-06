@@ -1,5 +1,4 @@
 use std::backtrace::Backtrace;
-use std::io::Cursor;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
@@ -583,31 +582,6 @@ impl ExloliUploader {
         Ok(())
     }
 
-    /// 本地转码为 WebP 格式（静态方法）
-    async fn convert_to_webp_locally_static(
-        client: &Client,
-        url: &str,
-        page: &EhPageUrl,
-    ) -> Result<Vec<u8>> {
-        debug!("开始本地转码 WebP: {}", page.page());
-        
-        // 下载原图
-        let original_bytes = client.get(url).send().await?
-            .bytes().await?;
-        
-        // 使用 image crate 解码图片
-        let img = image::load_from_memory(&original_bytes)
-            .map_err(|e| anyhow!("图片解码失败: {}", e))?;
-        
-        // 转换为 WebP 格式
-        let mut webp_bytes = Vec::new();
-        let mut cursor = Cursor::new(&mut webp_bytes);
-        
-        img.write_to(&mut cursor, ImageFormat::WebP)
-            .map_err(|e| anyhow!("WebP 编码失败: {}", e))?;
-        
-        Ok(webp_bytes)
-    }
 
     /// 从数据库中读取某个画廊的所有图片，生成一篇 telegraph 文章
     /// 为了防止画廊被删除后无法更新，此处不应该依赖 EhGallery
@@ -682,6 +656,46 @@ async fn flatten<T>(handle: JoinHandle<Result<T>>) -> Result<T> {
 }
 
 impl ExloliUploader {
+    /// 静态方法：本地 WebP 转码
+    async fn convert_to_webp_locally_static(client: &Client, url: &str, page: &EhPageUrl) -> Result<Vec<u8>> {
+        debug!("开始本地 WebP 转码: 页面 {}", page.page());
+        
+        // 下载原图
+        let response = client.get(url).send().await
+            .map_err(|e| anyhow!("下载原图失败: {}", e))?;
+        let original_bytes = response.bytes().await
+            .map_err(|e| anyhow!("读取原图数据失败: {}", e))?;
+            
+        debug!("原图下载完成: {} bytes", original_bytes.len());
+        
+        // 检测图片格式
+        let format = image::guess_format(&original_bytes)
+            .map_err(|e| anyhow!("无法识别图片格式: {}", e))?;
+            
+        // 如果已经是 WebP，直接返回
+        if format == ImageFormat::WebP {
+            debug!("图片已经是 WebP 格式，直接返回");
+            return Ok(original_bytes.to_vec());
+        }
+        
+        // 解码原图
+        let img = image::load_from_memory(&original_bytes)
+            .map_err(|e| anyhow!("解码图片失败: {}", e))?;
+            
+        // 编码为 WebP（无损）
+        let mut webp_bytes = Vec::new();
+        
+        // 使用 image crate 的 WebP 编码器
+        let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut webp_bytes);
+        encoder.encode(&img.to_rgba8(), img.width(), img.height(), image::ColorType::Rgba8.into())
+            .map_err(|e| anyhow!("WebP 编码失败: {}", e))?;
+            
+        debug!("本地 WebP 转码完成: {} bytes -> {} bytes", 
+               original_bytes.len(), webp_bytes.len());
+               
+        Ok(webp_bytes)
+    }
+
     /// 重新扫描并上传没有上传过但存在记录的画廊
     pub async fn reupload(&self, mut galleries: Vec<GalleryEntity>) -> Result<()> {
         if galleries.is_empty() {

@@ -191,7 +191,7 @@ impl EhClient {
             // 发布时间
             let gdt2_texts = html.select_texts("td.gdt2");
             if gdt2_texts.is_empty() {
-                return Err(anyhow::anyhow!("无法找到画廊信息 (td.gdt2)"));
+                return Err(anyhow::anyhow!("无法找到画廊信息 (td.gdt2)").into());
             }
             let posted = &gdt2_texts[0];
             let posted = NaiveDateTime::parse_from_str(posted, "%Y-%m-%d %H:%M")

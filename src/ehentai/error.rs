@@ -14,4 +14,6 @@ pub enum EhError {
     DateTimeError(#[from] chrono::format::ParseError),
     #[error("h@h url broken: {0}")]
     HaHUrlBroken(String),
+    #[error("anyhow error: {0}")]
+    AnyhowError(#[from] anyhow::Error),
 }
