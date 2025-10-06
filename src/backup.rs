@@ -113,7 +113,26 @@ impl BackupService {
         } else {
             "tar 未压缩包"
         };
-        
+
+        // 转义 MarkdownV2 特殊字符
+        let escaped_timestamp = datetime
+            .format("%Y-%m-%d %H:%M:%S UTC")
+            .to_string()
+            .replace("-", "\\-")
+            .replace(":", "\\:");
+
+        let escaped_path = dir_path
+            .display()
+            .to_string()
+            .replace("\\", "\\\\")
+            .replace("-", "\\-")
+            .replace(".", "\\.")
+            .replace("_", "\\_")
+            .replace(":", "\\:");
+
+        let escaped_format = format_info
+            .replace(".", "\\.");
+
         let caption = format!(
             "🗄️ *应用程序完整备份*
 
@@ -121,10 +140,10 @@ impl BackupService {
 📦 文件大小: {:.2} MB
 📁 备份内容: {} 目录完整备份
 🔧 格式: {}",
-            datetime.format("%Y\\--%m\\--%d %H:%M:%S UTC").to_string().replace("-", "\\-"),
+            escaped_timestamp,
             size_mb,
-            dir_path.display().to_string().replace("-", "\\-").replace(".", "\\."),
-            format_info.replace(".", "\\.")
+            escaped_path,
+            escaped_format
         );
 
         let input_file = InputFile::file(&backup_path);
