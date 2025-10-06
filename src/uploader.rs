@@ -397,11 +397,41 @@ impl ExloliUploader {
                         // 下载图片
                         debug!("正在请求下载: {}", download_url);
                         let mut bytes = match client.get(&download_url).send().await {
-                            Ok(response) => match response.bytes().await {
-                                Ok(bytes) => bytes,
-                                Err(e) => {
-                                    error!("下载图片失败 {}: {}", page.page(), e);
-                                    return Err(anyhow!("下载图片失败 {}: {}", page.page(), e));
+                            Ok(response) => {
+                                let status = response.status();
+                                debug!("图片 {} 响应状态: {}", page.page(), status);
+                                
+                                // 检查 H@H 节点是否返回错误状态码
+                                if !status.is_success() {
+                                    if download_url.contains("hath.network") {
+                                        error!("H@H 节点返回错误状态 {}: 所属的H@H节点异常，请稍后重试 (URL: {})", status, download_url);
+                                        return Err(anyhow!("所属的H@H节点异常，请稍后重试 (状态码: {}, URL: {})", status, download_url));
+                                    } else {
+                                        error!("请求失败，状态码: {} (URL: {})", status, download_url);
+                                        return Err(anyhow!("请求失败，状态码: {} (URL: {})", status, download_url));
+                                    }
+                                }
+                                
+                                match response.bytes().await {
+                                    Ok(bytes) => {
+                                        debug!("图片 {} 下载完成: {} bytes", page.page(), bytes.len());
+                                        
+                                        // 检查是否是 H@H 错误响应（通常很小且包含错误信息）
+                                        if download_url.contains("hath.network") && bytes.len() < 100 {
+                                            let content = String::from_utf8_lossy(&bytes);
+                                            warn!("H@H 节点可能返回错误响应: {} bytes, 内容: {:?}", bytes.len(), content);
+                                            if content.contains("error") || content.contains("Error") || bytes.len() < 50 {
+                                                error!("所属的H@H节点异常，请稍后重试 (状态码: {}, URL: {})", status, download_url);
+                                                return Err(anyhow!("所属的H@H节点异常，请稍后重试 (状态码: {}, URL: {})", status, download_url));
+                                            }
+                                        }
+                                        
+                                        bytes
+                                    },
+                                    Err(e) => {
+                                        error!("下载图片失败 {}: {}", page.page(), e);
+                                        return Err(anyhow!("下载图片失败 {}: {}", page.page(), e));
+                                    }
                                 }
                             },
                             Err(e) => {
@@ -414,9 +444,13 @@ impl ExloliUploader {
                         if should_compress && bytes.len() < 1000 {
                             warn!("wsrv.nl 压缩失败（文件太小: {} bytes），尝试备用服务", bytes.len());
                             
-                            // 尝试备用服务 images.weserv.nl
+                            // 尝试备用服务 images.weserv.nl (与主服务一样去掉协议头)
+                            let url_without_protocol = url
+                                .strip_prefix("https://")
+                                .or_else(|| url.strip_prefix("http://"))
+                                .unwrap_or(&url);
                             let fallback_url = format!("https://images.weserv.nl/?url={}&output=webp&ll&n=-1",
-                                urlencoding::encode(&url));
+                                urlencoding::encode(url_without_protocol));
                             debug!("尝试备用 WebP 服务: {}", fallback_url);
                             debug!("正在请求备用服务: {}", fallback_url);
                             
@@ -537,8 +571,36 @@ impl ExloliUploader {
                         let upload_url = match s3_clone.upload(&filename, &mut bytes.as_ref()).await {
                             Ok(url) => url,
                             Err(e) => {
-                                error!("上传图片失败 {}: {}", page.page(), e);
-                                return Err(anyhow!("上传图片失败 {}: {}", page.page(), e));
+                                warn!("上传图片失败 {}: {}，尝试备用上传方案", page.page(), e);
+                                
+                                // 如果原本没有进行WebP压缩，现在尝试本地转码后上传
+                                if !should_compress && suffix != "webp" {
+                                    debug!("尝试本地WebP转码后重新上传，原图URL: {}", url);
+                                    match Self::convert_to_webp_locally_static(&client, &url, &page).await {
+                                        Ok(webp_bytes) => {
+                                            let webp_filename = format!("{}.webp", page.hash());
+                                            debug!("本地转码成功，尝试上传WebP: {} bytes", webp_bytes.len());
+                                            
+                                            match s3_clone.upload(&webp_filename, &mut webp_bytes.as_ref()).await {
+                                                Ok(webp_url) => {
+                                                    debug!("WebP备用上传成功: {}", page.page());
+                                                    webp_url
+                                                },
+                                                Err(webp_e) => {
+                                                    error!("WebP备用上传也失败 {}: {}", page.page(), webp_e);
+                                                    return Err(anyhow!("上传图片失败 {}: {}", page.page(), e));
+                                                }
+                                            }
+                                        },
+                                        Err(transcode_e) => {
+                                            error!("本地转码失败 {}: {}，无法进行备用上传", page.page(), transcode_e);
+                                            return Err(anyhow!("上传图片失败 {}: {}", page.page(), e));
+                                        }
+                                    }
+                                } else {
+                                    error!("上传图片失败 {}: {}", page.page(), e);
+                                    return Err(anyhow!("上传图片失败 {}: {}", page.page(), e));
+                                }
                             }
                         };
                         debug!("已上传: {}", page.page());
