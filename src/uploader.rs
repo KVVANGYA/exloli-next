@@ -323,8 +323,8 @@ impl ExloliUploader {
             let s3_clone = s3.clone();
             
             let client = Client::builder()
-                .timeout(Duration::from_secs(30))
-                .connect_timeout(Duration::from_secs(30))
+                .timeout(self.config.api_timeout)
+                .connect_timeout(self.config.api_timeout)
                 .build()?;
             
             let handle = tokio::spawn(
