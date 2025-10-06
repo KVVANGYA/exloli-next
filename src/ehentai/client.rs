@@ -24,9 +24,10 @@ macro_rules! headers {
 }
 
 macro_rules! send {
-    ($e:expr) => {
+    ($e:expr) => {{
+        // 注意：我们无法直接从RequestBuilder获取URL，所以我们需要在调用宏之前记录URL
         $e.send().await.and_then(reqwest::Response::error_for_status)
-    };
+    }};
 }
 
 macro_rules! selector {
@@ -65,10 +66,14 @@ impl EhClient {
 
         // 获取必要的 cookie
         debug!("访问 uconfig.php");
-        let _response = send!(init_client.get("https://exhentai.org/uconfig.php").headers(headers.clone()))?;
+        let uconfig_url = "https://exhentai.org/uconfig.php";
+        debug!("发送请求: {}", uconfig_url);
+        let _response = send!(init_client.get(uconfig_url).headers(headers.clone()))?;
         
         debug!("访问 mytags");
-        let _response = send!(init_client.get("https://exhentai.org/mytags").headers(headers))?;
+        let mytags_url = "https://exhentai.org/mytags";
+        debug!("发送请求: {}", mytags_url);
+        let _response = send!(init_client.get(mytags_url).headers(headers))?;
         debug!("mytags: {}", _response.text().await?);
 
         // 构建最终使用的客户端，它会继承 cookie store 中的所有 cookie
@@ -101,6 +106,8 @@ impl EhClient {
         params: &T,
         next: &str,
     ) -> Result<(Vec<EhGalleryUrl>, Option<String>)> {
+        let full_url = format!("{}?next={}", url, next);
+        debug!("发送请求: {}", full_url);
         let resp = send!(self.0.get(url).query(params).query(&[("next", next)]))?;
         let html = Html::parse_document(&resp.text().await?);
 
@@ -164,15 +171,18 @@ impl EhClient {
     pub async fn archive_gallery(&self, url: &EhGalleryUrl) -> Result<()> {
         static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"or=(?P<or>[0-9a-z-]+)").unwrap());
 
+        let archive_url = "https://exhentai.org/archiver.php";
+        debug!("发送请求: {}", archive_url);
         let resp = send!(self.0.get(url.url()))?;
         let html = Html::parse_document(&resp.text().await?);
         let onclick = html.select_attr("p.g2 a", "onclick").unwrap();
 
         let or = RE.captures(&onclick).and_then(|c| c.name("or")).unwrap().as_str();
 
+        debug!("发送请求: {}?gid={}&token={}&or={}", archive_url, url.id(), url.token(), or);
         send!(self
             .0
-            .post("https://exhentai.org/archiver.php")
+            .post(archive_url)
             .query(&[("gid", &*url.id().to_string()), ("token", url.token()), ("or", or)])
             .form(&[("hathdl_xres", "org")]))?;
 
@@ -184,6 +194,7 @@ impl EhClient {
         // NOTE: 由于 Html 是 !Send 的，为了避免它被包含在 Future 上下文中，这里将它放在一个单独的作用域内
         // 参见：https://rust-lang.github.io/async-book/07_workarounds/03_send_approximation.html
         let (title, title_jp, parent, tags, favorite, mut pages, posted, mut next_page) = {
+            debug!("发送请求: {}", url.url());
             let resp = send!(self.0.get(url.url()))?;
             let html = Html::parse_document(&resp.text().await?);
 
@@ -228,7 +239,7 @@ impl EhClient {
         };
 
         while let Some(next_page_url) = &next_page {
-            debug!(next_page_url);
+            debug!("发送请求: {}", next_page_url);
             let resp = send!(self.0.get(next_page_url))?;
             let html = Html::parse_document(&resp.text().await?);
             // 每一页的 URL
@@ -258,6 +269,7 @@ impl EhClient {
     /// 获取画廊的某一页的图片的 fileindex 和实际地址和 nl
     #[tracing::instrument(skip(self))]
     pub async fn get_image_url(&self, page: &EhPageUrl) -> Result<(u32, String)> {
+        debug!("发送请求: {}", page.url());
         let resp = send!(self.0.get(&page.url()))?;
         let (original_url, url, nl, fileindex) = {
             let html = Html::parse_document(&resp.text().await?);
@@ -303,10 +315,13 @@ impl EhClient {
         nl: Option<String>,
         fileindex: u32,
     ) -> Result<(u32, String)> {
+        debug!("发送 HEAD 请求: {}", url);
         if send!(self.0.head(&url)).is_ok() {
             Ok((fileindex, url))
-        } else if nl.is_some() {
-            let resp = send!(self.0.get(&page.with_nl(&nl.unwrap()).url()))?;
+        } else if let Some(nl) = &nl {
+            let page_with_nl = page.with_nl(nl);
+            debug!("发送请求: {}", page_with_nl.url());
+            let resp = send!(self.0.get(&page_with_nl.url()))?;
             let html = Html::parse_document(&resp.text().await?);
             let url = html.select_attr("img#img", "src").unwrap();
             Ok((fileindex, url))
