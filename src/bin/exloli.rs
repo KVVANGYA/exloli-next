@@ -25,7 +25,7 @@ async fn main() -> Result<()> {
         .unwrap();
 
     let trans = EhTagTransDB::new(&config.exhentai.trans_file);
-    let ehentai = EhClient::new(&config.exhentai.cookie).await?;
+    let ehentai = EhClient::new_with_timeout(&config.exhentai.cookie, config.api_timeout).await?;
     let bot = Bot::new(&config.telegram.token)
         .throttle(Default::default())
         .parse_mode(ParseMode::Html)

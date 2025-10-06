@@ -7,6 +7,9 @@ threads_num = 1
 interval = "1h"
 # 数据库文件位置
 database_url = "db.sqlite"
+# API 请求超时时间 (默认: 30s)
+# 由于图片转码需要一定时间，如遇到超时可适当增加
+api_timeout = "30s"
 
 [exhentai]
 # E 站 cookie
