@@ -74,9 +74,10 @@ impl EhClient {
         let mytags_url = "https://exhentai.org/mytags";
         debug!("发送请求: {}", mytags_url);
         let _response = send!(client.get(mytags_url).headers(headers))?;
-        debug!("mytags: {}", _response.text().await?);
+        let mytags_content = _response.text().await?;
+        debug!("mytags 响应长度: {}", mytags_content.len());
 
-        // 设置最终使用的默认头部
+        // 设置最终使用的默认头部，但不包括COOKIE，因为cookie应该由cookie store管理
         let final_headers = headers! {
             ACCEPT => "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
             ACCEPT_ENCODING => "gzip, deflate, br, zstd", 
@@ -196,11 +197,37 @@ impl EhClient {
         // 参见：https://rust-lang.github.io/async-book/07_workarounds/03_send_approximation.html
         let (title, title_jp, parent, tags, favorite, mut pages, posted, mut next_page) = {
             debug!("发送请求: {}", url.url());
-            let resp = send!(self.0.get(url.url()))?;
-            let html = Html::parse_document(&resp.text().await?);
+            
+            // 添加更多调试信息
+            let request_url = url.url();
+            let request = self.0.get(&request_url);
+            
+            // 检查当前客户端的cookie
+            debug!("准备发送请求到: {}", request_url);
+            
+            let resp = send!(request)?;
+            
+            // 检查响应状态
+            debug!("响应状态: {:?}", resp.status());
+            
+            let content = resp.text().await?;
+            debug!("响应内容长度: {}", content.len());
+            
+            // 如果内容长度很小，可能是错误页面
+            if content.len() < 1000 {
+                debug!("响应内容可能不是有效的画廊页面: {}", &content[..std::cmp::min(500, content.len())]);
+                return Err(anyhow::anyhow!("收到的响应内容不符合预期，可能是未授权访问").into());
+            }
+            
+            let html = Html::parse_document(&content);
 
             // 英文标题、日文标题、父画廊
-            let title = html.select_text("h1#gn").ok_or_else(|| anyhow::anyhow!("无法找到画廊标题 (h1#gn)"))?;
+            let title = html.select_text("h1#gn").ok_or_else(|| {
+                // 如果找不到标题，输出更多调试信息
+                debug!("无法找到画廊标题 (h1#gn)，页面HTML结构可能不正确");
+                debug!("页面前1000个字符: {}", &content[..std::cmp::min(1000, content.len())]);
+                anyhow::anyhow!("无法找到画廊标题 (h1#gn)")
+            })?;
             let title_jp = html.select_text("h1#gj");
             let parent = html.select_attr("td.gdt2 a", "href").and_then(|s| s.parse().ok());
 
