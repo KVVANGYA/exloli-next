@@ -347,7 +347,7 @@ impl ExloliUploader {
                         let suffix = url.split('.').last().unwrap_or("jpg");
 
                         // 先获取 Content-Length 检查文件大小
-                        let (should_compress, file_size) = match client.head(&url).send().await {
+                        let (should_compress, _file_size) = match client.head(&url).send().await {
                             Ok(response) => {
                                 if let Some(content_length) = response.headers().get("content-length") {
                                     if let Ok(size_str) = content_length.to_str() {
