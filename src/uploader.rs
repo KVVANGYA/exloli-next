@@ -1,9 +1,11 @@
 use std::backtrace::Backtrace;
+use std::io::Cursor;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
 use chrono::{Datelike, Utc};
 use futures::StreamExt;
+use image::ImageFormat;
 use regex::Regex;
 use reqwest::{Client, StatusCode};
 use telegraph_rs::{html_to_node, Telegraph};
@@ -19,7 +21,7 @@ use crate::config::Config;
 use crate::database::{
     GalleryEntity, ImageEntity, MessageEntity, PageEntity, PollEntity, TelegraphEntity,
 };
-use crate::ehentai::{EhClient, EhGallery, EhGalleryUrl, GalleryInfo};
+use crate::ehentai::{EhClient, EhGallery, EhGalleryUrl, EhPageUrl, GalleryInfo};
 use crate::s3::S3Uploader;
 use crate::tags::EhTagTransDB;
 use crate::utils::pad_left;
@@ -396,23 +398,112 @@ impl ExloliUploader {
 
                         // 检查 WebP 压缩是否失败（文件太小说明是错误页面）
                         if should_compress && bytes.len() < 1000 {
-                            warn!("WebP 压缩失败（文件太小: {} bytes），降级使用原图", bytes.len());
-                            // 降级使用原图
-                            filename = format!("{}.{}", page.hash(), suffix);
-                            bytes = match client.get(&url).send().await {
+                            warn!("wsrv.nl 压缩失败（文件太小: {} bytes），尝试备用服务", bytes.len());
+                            
+                            // 尝试备用服务 images.weserv.nl
+                            let fallback_url = format!("https://images.weserv.nl/?url={}&output=webp&ll&n=-1",
+                                urlencoding::encode(&url));
+                            debug!("尝试备用 WebP 服务: {}", fallback_url);
+                            
+                            bytes = match client.get(&fallback_url).send().await {
                                 Ok(response) => match response.bytes().await {
-                                    Ok(b) => b,
+                                    Ok(b) if b.len() >= 1000 => {
+                                        debug!("备用 WebP 服务成功: {} bytes", b.len());
+                                        b
+                                    },
+                                    Ok(b) => {
+                                        warn!("备用 WebP 服务也失败（文件太小: {} bytes），尝试本地转码", b.len());
+                                        // 尝试本地转码
+                                        match Self::convert_to_webp_locally_static(&client, &url, &page).await {
+                                            Ok(webp_bytes) => {
+                                                debug!("本地 WebP 转码成功: {} bytes", webp_bytes.len());
+                                                filename = format!("{}.webp", page.hash());
+                                                webp_bytes.into()
+                                            },
+                                            Err(e) => {
+                                                warn!("本地转码也失败: {}，最终降级使用原图", e);
+                                                // 最终降级使用原图
+                                                filename = format!("{}.{}", page.hash(), suffix);
+                                                match client.get(&url).send().await {
+                                                    Ok(resp) => match resp.bytes().await {
+                                                        Ok(orig_bytes) => orig_bytes,
+                                                        Err(e) => {
+                                                            error!("下载原图失败 {}: {}", page.page(), e);
+                                                            return Err(anyhow!("下载原图失败 {}: {}", page.page(), e));
+                                                        }
+                                                    },
+                                                    Err(e) => {
+                                                        error!("请求原图失败 {}: {}", page.page(), e);
+                                                        return Err(anyhow!("请求原图失败 {}: {}", page.page(), e));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
                                     Err(e) => {
-                                        error!("下载原图失败 {}: {}", page.page(), e);
-                                        return Err(anyhow!("下载原图失败 {}: {}", page.page(), e));
+                                        warn!("备用 WebP 服务请求失败: {}，尝试本地转码", e);
+                                        // 尝试本地转码
+                                        match Self::convert_to_webp_locally_static(&client, &url, &page).await {
+                                            Ok(webp_bytes) => {
+                                                debug!("本地 WebP 转码成功: {} bytes", webp_bytes.len());
+                                                filename = format!("{}.webp", page.hash());
+                                                webp_bytes.into()
+                                            },
+                                            Err(e) => {
+                                                warn!("本地转码也失败: {}，最终降级使用原图", e);
+                                                // 最终降级使用原图
+                                                filename = format!("{}.{}", page.hash(), suffix);
+                                                match client.get(&url).send().await {
+                                                    Ok(resp) => match resp.bytes().await {
+                                                        Ok(orig_bytes) => orig_bytes,
+                                                        Err(e) => {
+                                                            error!("下载原图失败 {}: {}", page.page(), e);
+                                                            return Err(anyhow!("下载原图失败 {}: {}", page.page(), e));
+                                                        }
+                                                    },
+                                                    Err(e) => {
+                                                        error!("请求原图失败 {}: {}", page.page(), e);
+                                                        return Err(anyhow!("请求原图失败 {}: {}", page.page(), e));
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 },
                                 Err(e) => {
-                                    error!("请求原图失败 {}: {}", page.page(), e);
-                                    return Err(anyhow!("请求原图失败 {}: {}", page.page(), e));
+                                    warn!("备用 WebP 服务请求失败: {}，尝试本地转码", e);
+                                    // 尝试本地转码
+                                    match Self::convert_to_webp_locally_static(&client, &url, &page).await {
+                                        Ok(webp_bytes) => {
+                                            debug!("本地 WebP 转码成功: {} bytes", webp_bytes.len());
+                                            filename = format!("{}.webp", page.hash());
+                                            webp_bytes.into()
+                                        },
+                                        Err(e) => {
+                                            warn!("本地转码也失败: {}，最终降级使用原图", e);
+                                            // 最终降级使用原图
+                                            filename = format!("{}.{}", page.hash(), suffix);
+                                            match client.get(&url).send().await {
+                                                Ok(resp) => match resp.bytes().await {
+                                                    Ok(orig_bytes) => orig_bytes,
+                                                    Err(e) => {
+                                                        error!("下载原图失败 {}: {}", page.page(), e);
+                                                        return Err(anyhow!("下载原图失败 {}: {}", page.page(), e));
+                                                    }
+                                                },
+                                                Err(e) => {
+                                                    error!("请求原图失败 {}: {}", page.page(), e);
+                                                    return Err(anyhow!("请求原图失败 {}: {}", page.page(), e));
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             };
-                            debug!("已下载: {} (原图降级, {} bytes)", page.page(), bytes.len());
+                            
+                            debug!("已下载: {} ({}, {} bytes)", page.page(), 
+                                if filename.ends_with(".webp") { "备用WebP" } else { "原图降级" },
+                                bytes.len());
                         } else {
                             debug!("已下载: {} ({}, {} bytes)", page.page(),
                                 if should_compress { "WebP" } else { suffix },
@@ -476,6 +567,32 @@ impl ExloliUploader {
         }
 
         Ok(())
+    }
+
+    /// 本地转码为 WebP 格式（静态方法）
+    async fn convert_to_webp_locally_static(
+        client: &Client,
+        url: &str,
+        page: &EhPageUrl,
+    ) -> Result<Vec<u8>> {
+        debug!("开始本地转码 WebP: {}", page.page());
+        
+        // 下载原图
+        let original_bytes = client.get(url).send().await?
+            .bytes().await?;
+        
+        // 使用 image crate 解码图片
+        let img = image::load_from_memory(&original_bytes)
+            .map_err(|e| anyhow!("图片解码失败: {}", e))?;
+        
+        // 转换为 WebP 格式
+        let mut webp_bytes = Vec::new();
+        let mut cursor = Cursor::new(&mut webp_bytes);
+        
+        img.write_to(&mut cursor, ImageFormat::WebP)
+            .map_err(|e| anyhow!("WebP 编码失败: {}", e))?;
+        
+        Ok(webp_bytes)
     }
 
     /// 从数据库中读取某个画廊的所有图片，生成一篇 telegraph 文章
