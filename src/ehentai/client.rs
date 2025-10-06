@@ -44,7 +44,35 @@ impl EhClient {
         info!("登陆 E 站中");
         // 将 cookie 日志级别改为 debug，避免在生产环境泄露敏感信息
         debug!("cookie: {}", cookie);
-        let headers = headers! {
+        
+        // 先创建一个不带默认头部的客户端用于初始化cookie
+        let init_client = Client::builder()
+            .cookie_store(true)
+            .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(30))
+            .build()?;
+
+        // 手动设置cookie头部
+        let cookie_value = HeaderValue::from_str(cookie)?;
+        let mut headers = HeaderMap::new();
+        headers.insert(COOKIE, cookie_value);
+        
+        // 设置其他必要的请求头
+        headers.insert(ACCEPT, HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"));
+        headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6"));
+        headers.insert(REFERER, HeaderValue::from_static("https://exhentai.org"));
+        headers.insert(USER_AGENT, HeaderValue::from_static("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0"));
+
+        // 获取必要的 cookie
+        debug!("访问 uconfig.php");
+        let _response = send!(init_client.get("https://exhentai.org/uconfig.php").headers(headers.clone()))?;
+        
+        debug!("访问 mytags");
+        let _response = send!(init_client.get("https://exhentai.org/mytags").headers(headers))?;
+        debug!("mytags: {}", _response.text().await?);
+
+        // 构建最终使用的客户端，它会继承 cookie store 中的所有 cookie
+        let final_headers = headers! {
             ACCEPT => "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
             ACCEPT_ENCODING => "gzip, deflate, br, zstd", 
             ACCEPT_LANGUAGE => "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
@@ -60,21 +88,15 @@ impl EhClient {
             SEC_FETCH_SITE => "cross-site",
             SEC_FETCH_USER => "?1",
             UPGRADE_INSECURE_REQUESTS => "1",
-            USER_AGENT => "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0",
-            COOKIE => cookie
+            USER_AGENT => "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0"
         };
 
         let client = Client::builder()
             .cookie_store(true)
-            .default_headers(headers)
+            .default_headers(final_headers)
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(30))
             .build()?;
-
-        // 获取必要的 cookie
-        let _response = send!(client.get("https://exhentai.org/uconfig.php"))?;
-        let _response = send!(client.get("https://exhentai.org/mytags"))?;
-        debug!("mytags: {}", _response.text().await?);
 
         Ok(Self(client))
     }
