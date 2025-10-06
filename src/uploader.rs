@@ -354,15 +354,28 @@ impl ExloliUploader {
                                     if let Ok(size_str) = content_length.to_str() {
                                         if let Ok(size) = size_str.parse::<usize>() {
                                             let should_compress = size > 1_000_000; // 超过 1MB
+                                            debug!("图片 {} HEAD 请求成功，大小 {} bytes", page.page(), size);
                                             if should_compress {
                                                 debug!("图片 {} 大小 {} bytes，使用 WebP 压缩", page.page(), size);
                                             }
                                             should_compress
-                                        } else { false }
-                                    } else { false }
-                                } else { false }
+                                        } else { 
+                                            debug!("图片 {} HEAD 请求 Content-Length 解析失败: {}", page.page(), size_str);
+                                            false 
+                                        }
+                                    } else { 
+                                        debug!("图片 {} HEAD 请求 Content-Length 转换字符串失败", page.page());
+                                        false 
+                                    }
+                                } else { 
+                                    debug!("图片 {} HEAD 请求没有 Content-Length 头", page.page());
+                                    false 
+                                }
                             }
-                            Err(_) => false, // HEAD 失败则不压缩
+                            Err(e) => {
+                                debug!("图片 {} HEAD 请求失败: {}", page.page(), e);
+                                false // HEAD 失败则不压缩
+                            }
                         };
 
                         // 根据文件大小决定是否使用 WebP 压缩
