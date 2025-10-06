@@ -206,7 +206,10 @@ impl ExloliUploader {
 
     /// 检查 telegraph 文章是否正常
     pub async fn check_telegraph(&self, url: &str) -> Result<bool> {
-        Ok(Client::new().head(url).send().await?.status() != StatusCode::NOT_FOUND)
+        let client = Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()?;
+        Ok(Self::send_with_retry(&client, client.head(url), 2).await?.status() != StatusCode::NOT_FOUND)
     }
 }
 
@@ -323,7 +326,7 @@ impl ExloliUploader {
             let s3_clone = s3.clone();
             
             let client = Client::builder()
-                .timeout(Duration::from_secs(30))
+                .timeout(Duration::from_secs(60))  // 增加到60秒，因为API转码需要较长时间
                 .connect_timeout(Duration::from_secs(30))
                 .build()?;
             
@@ -347,7 +350,7 @@ impl ExloliUploader {
                         let suffix = url.split('.').last().unwrap_or("jpg");
 
                         // 先获取 Content-Length 检查文件大小
-                        let (should_compress, original_file_size) = match client.head(&url).send().await {
+                        let (should_compress, original_file_size) = match Self::send_with_retry(&client, client.head(&url), 2).await {
                             Ok(response) => {
                                 if let Some(content_length) = response.headers().get("content-length") {
                                     if let Ok(size_str) = content_length.to_str() {
@@ -391,7 +394,7 @@ impl ExloliUploader {
                         // 下载图片
                         debug!("正在请求下载: {}", download_url);
                         let mut request_failed = false; // 标记网络请求是否失败
-                        let mut bytes = match client.get(&download_url).send().await {
+                        let mut bytes = match Self::send_with_retry(&client, client.get(&download_url), 2).await {
                             Ok(response) => {
                                 let status = response.status();
                                 debug!("图片 {} 响应状态: {}", page.page(), status);
@@ -415,7 +418,7 @@ impl ExloliUploader {
                                         
                                         debug!("504超时重试URL: {}", fallback_url);
                                         // 立即重试质量100的压缩
-                                        match client.get(&fallback_url).send().await {
+                                        match Self::send_with_retry(&client, client.get(&fallback_url), 2).await {
                                             Ok(retry_resp) => {
                                                 if retry_resp.status().is_success() {
                                                     match retry_resp.bytes().await {
@@ -488,7 +491,7 @@ impl ExloliUploader {
                         if use_original_instead {
                             // 下载原图
                             debug!("下载原图替代压缩版本: {}", url);
-                            bytes = match client.get(&url).send().await {
+                            bytes = match Self::send_with_retry(&client, client.get(&url), 2).await {
                                 Ok(response) => {
                                     if response.status().is_success() {
                                         match response.bytes().await {
@@ -543,7 +546,7 @@ impl ExloliUploader {
                             };
                             debug!("正在请求: {}", service_url);
                             
-                            bytes = match client.get(&service_url).send().await {
+                            bytes = match Self::send_with_retry(&client, client.get(&service_url), 2).await {
                                 Ok(response) => match response.bytes().await {
                                     Ok(b) if b.len() >= 1000 && b.len() <= 4_900_000 => {
                                         debug!("{} 成功: {} bytes", service_name, b.len());
@@ -564,7 +567,7 @@ impl ExloliUploader {
                                                 urlencoding::encode(&url));
                                             debug!("尝试备用 API wsrv.nl 有损: {}", backup_url);
                                             
-                                            match client.get(&backup_url).send().await {
+                                            match Self::send_with_retry(&client, client.get(&backup_url), 2).await {
                                                 Ok(backup_resp) => match backup_resp.bytes().await {
                                                     Ok(backup_bytes) if backup_bytes.len() >= 1000 && backup_bytes.len() <= 4_900_000 => {
                                                         debug!("wsrv.nl 有损压缩成功: {} bytes", backup_bytes.len());
@@ -591,7 +594,7 @@ impl ExloliUploader {
                                                 urlencoding::encode(&url));
                                             debug!("尝试 wsrv.nl 有损: {}", backup_url);
                                             
-                                            match client.get(&backup_url).send().await {
+                                            match Self::send_with_retry(&client, client.get(&backup_url), 2).await {
                                                 Ok(backup_resp) => match backup_resp.bytes().await {
                                                     Ok(backup_bytes) if backup_bytes.len() >= 1000 && backup_bytes.len() <= 4_900_000 => {
                                                         debug!("wsrv.nl 有损压缩成功: {} bytes", backup_bytes.len());
@@ -619,7 +622,7 @@ impl ExloliUploader {
                                                 urlencoding::encode(&url));
                                             debug!("尝试 images.weserv.nl JPG质量95: {}", backup_url);
                                             
-                                            match client.get(&backup_url).send().await {
+                                            match Self::send_with_retry(&client, client.get(&backup_url), 2).await {
                                                 Ok(backup_resp) => match backup_resp.bytes().await {
                                                     Ok(backup_bytes) if backup_bytes.len() >= 1000 && backup_bytes.len() <= 4_900_000 => {
                                                         debug!("wsrv.nl 有损压缩成功: {} bytes", backup_bytes.len());
@@ -862,6 +865,24 @@ impl ExloliUploader {
         }
     }
 
+    /// 发送带重试机制的HTTP请求
+    async fn send_with_retry(client: &Client, request_builder: reqwest::RequestBuilder, max_retries: u32) -> Result<reqwest::Response> {
+        let mut retries = 0;
+        loop {
+            match request_builder.try_clone().ok_or_else(|| anyhow!("无法克隆请求"))?.send().await {
+                Ok(response) => return Ok(response),
+                Err(e) => {
+                    retries += 1;
+                    if retries > max_retries {
+                        return Err(anyhow!("请求失败，已重试 {} 次: {}", max_retries, e));
+                    }
+                    warn!("请求失败，{} 秒后进行第 {} 次重试: {}", 2u64.pow(retries), retries, e);
+                    tokio::time::sleep(Duration::from_secs(2u64.pow(retries))).await;
+                }
+            }
+        }
+    }
+
     /// 尝试本地转码的辅助方法
     async fn try_local_transcode(
         client: &Client,
@@ -886,7 +907,7 @@ impl ExloliUploader {
                 warn!("本地转码也失败: {}，最终降级使用原图", e);
                 // 最终降级使用原图
                 *filename = format!("{}.{}", page.hash(), suffix);
-                match client.get(url).send().await {
+                match Self::send_with_retry(client, client.get(url), 2).await {
                     Ok(resp) => match resp.bytes().await {
                         Ok(orig_bytes) => Ok(orig_bytes.to_vec()),
                         Err(e) => Err(anyhow!("下载原图失败: {}", e))
@@ -943,7 +964,7 @@ impl ExloliUploader {
         debug!("开始本地 WebP 转码: 页面 {}", page.page());
         
         // 下载原图
-        let response = client.get(url).send().await
+        let response = Self::send_with_retry(client, client.get(url), 2).await
             .map_err(|e| anyhow!("下载原图失败: {}", e))?;
         let original_bytes = response.bytes().await
             .map_err(|e| anyhow!("读取原图数据失败: {}", e))?;
