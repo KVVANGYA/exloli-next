@@ -133,15 +133,17 @@ impl BackupService {
         let escaped_format = format_info
             .replace(".", "\\.");
 
+        let escaped_size = format!("{:.2}", size_mb).replace(".", "\\.");
+
         let caption = format!(
             "🗄️ *应用程序完整备份*
 
 📅 备份时间: {}
-📦 文件大小: {:.2} MB
+📦 文件大小: {} MB
 📁 备份内容: {} 目录完整备份
 🔧 格式: {}",
             escaped_timestamp,
-            size_mb,
+            escaped_size,
             escaped_path,
             escaped_format
         );
