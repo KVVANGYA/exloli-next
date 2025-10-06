@@ -368,8 +368,9 @@ impl ExloliUploader {
                         };
 
                         // 根据文件大小决定是否使用 WebP 压缩
+                        // 使用 ll 参数启用无损压缩
                         let (download_url, filename) = if should_compress {
-                            let webp_url = format!("https://images.weserv.nl/?url={}&output=webp&q=100",
+                            let webp_url = format!("https://images.weserv.nl/?url={}&output=webp&ll&n=-1",
                                 urlencoding::encode(&url));
                             (webp_url, format!("{}.webp", page.hash()))
                         } else {
