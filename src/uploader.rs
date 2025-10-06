@@ -376,6 +376,7 @@ impl ExloliUploader {
                             
                             let webp_url = format!("https://wsrv.nl/?url={}&output=webp&ll&n=-1",
                                 urlencoding::encode(url_without_protocol));
+                            debug!("使用WebP压缩服务下载图片: {}", webp_url);
                             (webp_url, format!("{}.webp", page.hash()))
                         } else {
                             (url.clone(), format!("{}.{}", page.hash(), suffix))
