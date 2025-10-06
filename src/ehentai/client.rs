@@ -18,7 +18,7 @@ use crate::utils::html::SelectorExtend;
 macro_rules! headers {
     ($($k:ident => $v:expr), *) => {{
         [
-            $(($k.clone(), $v.parse().unwrap()),)*
+            $(($k, $v.parse().unwrap()),)*
         ].into_iter().collect::<HeaderMap>()
     }};
 }
@@ -53,7 +53,7 @@ impl EhClient {
             .build()?;
 
         // 手动设置cookie头部
-        let cookie_value = HeaderValue::from_str(cookie)?;
+        let cookie_value = HeaderValue::from_str(cookie).map_err(|e| anyhow::anyhow!("Invalid cookie: {}", e))?;
         let mut headers = HeaderMap::new();
         headers.insert(COOKIE, cookie_value);
         
@@ -78,15 +78,7 @@ impl EhClient {
             ACCEPT_LANGUAGE => "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
             CACHE_CONTROL => "no-cache",
             PRAGMA => "no-cache",
-            PRIORITY => "u=0, i",
             REFERER => "https://exhentai.org",
-            SEC_CH_UA => "\"Microsoft Edge\";v=\"141\", \"Not?A_Brand\";v=\"8\", \"Chromium\";v=\"141\"",
-            SEC_CH_UA_MOBILE => "?0",
-            SEC_CH_UA_PLATFORM => "\"Windows\"",
-            SEC_FETCH_DEST => "document",
-            SEC_FETCH_MODE => "navigate",
-            SEC_FETCH_SITE => "cross-site",
-            SEC_FETCH_USER => "?1",
             UPGRADE_INSECURE_REQUESTS => "1",
             USER_AGENT => "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0"
         };
