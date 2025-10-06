@@ -390,6 +390,7 @@ impl ExloliUploader {
 
                         // 下载图片
                         debug!("正在请求下载: {}", download_url);
+                        let mut request_failed = false; // 标记网络请求是否失败
                         let mut bytes = match client.get(&download_url).send().await {
                             Ok(response) => {
                                 let status = response.status();
@@ -466,21 +467,31 @@ impl ExloliUploader {
                                 }
                             },
                             Err(e) => {
-                                error!("请求图片失败 {}: {}", page.page(), e);
-                                return Err(anyhow!("请求图片失败 {}: {}", page.page(), e));
+                                warn!("主压缩API请求失败 {}: {}，尝试备用方案", page.page(), e);
+                                // 请求失败时，设置空bytes并标记失败
+                                request_failed = true;
+                                vec![].into()
                             }
                         };
 
-                        // 检查 WebP 压缩结果
-                        if should_compress && (bytes.len() < 1000 || bytes.len() > 4_900_000) {
-                            if bytes.len() < 1000 {
+                        // 检查 WebP 压缩结果或网络请求失败
+                        if should_compress && (request_failed || bytes.len() < 1000 || bytes.len() > 4_900_000) {
+                            if request_failed {
+                                warn!("images.weserv.nl 网络请求失败，尝试备用API");
+                            } else if bytes.len() < 1000 {
                                 warn!("images.weserv.nl 无损压缩失败（文件太小: {} bytes），尝试备用API", bytes.len());
                             } else {
                                 warn!("images.weserv.nl 无损压缩过大（{} bytes > 4.9MB），尝试有损压缩", bytes.len());
                             }
                             
                             // 根据失败原因选择处理方式
-                            let (service_url, service_name) = if bytes.len() > 4_900_000 {
+                            let (service_url, service_name) = if request_failed {
+                                // 网络请求失败，直接使用备用API wsrv.nl
+                                let backup_url = format!("https://wsrv.nl/?url={}&output=webp&ll&n=-1",
+                                    urlencoding::encode(&url));
+                                debug!("网络请求失败，尝试备用 API wsrv.nl 无损: {}", backup_url);
+                                (backup_url, "wsrv.nl 无损")
+                            } else if bytes.len() > 4_900_000 {
                                 // 文件过大，先尝试images.weserv.nl有损压缩
                                 let images_lossy_url = format!("https://images.weserv.nl/?url={}&output=webp&q=95&n=-1",
                                     urlencoding::encode(&url));
