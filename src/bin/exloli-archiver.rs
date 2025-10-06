@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
         .try_init()
         .unwrap();
 
-    let ehentai = EhClient::new_with_timeout(&config.exhentai.cookie, config.api_timeout).await?;
+    let ehentai = EhClient::new(&config.exhentai.cookie).await?;
     let params = [("favcat", args.favcat)];
     let stream = ehentai.page_iter("https://exhentai.org/favorites.php", &params);
     tokio::pin!(stream);

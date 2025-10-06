@@ -36,19 +36,11 @@ macro_rules! selector {
 }
 
 #[derive(Debug, Clone)]
-pub struct EhClient {
-    pub client: Client,
-    pub timeout: Duration,
-}
+pub struct EhClient(pub Client);
 
 impl EhClient {
     #[tracing::instrument(skip(cookie))]
     pub async fn new(cookie: &str) -> Result<Self> {
-        Self::new_with_timeout(cookie, Duration::from_secs(30)).await
-    }
-
-    #[tracing::instrument(skip(cookie))]
-    pub async fn new_with_timeout(cookie: &str, timeout: Duration) -> Result<Self> {
         info!("登陆 E 站中");
         // 将 cookie 日志级别改为 debug，避免在生产环境泄露敏感信息
         debug!("cookie: {}", cookie);
@@ -68,8 +60,8 @@ impl EhClient {
         let client = Client::builder()
             .cookie_store(true)
             .default_headers(headers)
-            .timeout(timeout)
-            .connect_timeout(timeout)
+            .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(30))
             .build()?;
 
         // 获取必要的 cookie
@@ -77,7 +69,7 @@ impl EhClient {
         let _response = send!(client.get("https://exhentai.org/mytags"))?;
         debug!("mytags: {}", _response.text().await?);
 
-        Ok(Self { client, timeout })
+        Ok(Self(client))
     }
 
     /// 访问指定页面，返回画廊列表
@@ -88,7 +80,7 @@ impl EhClient {
         params: &T,
         next: &str,
     ) -> Result<(Vec<EhGalleryUrl>, Option<String>)> {
-        let resp = send!(self.client.get(url).query(params).query(&[("next", next)]))?;
+        let resp = send!(self.0.get(url).query(params).query(&[("next", next)]))?;
         let html = Html::parse_document(&resp.text().await?);
 
         let selector = selector!("table.itg.gltc tr");
@@ -151,14 +143,14 @@ impl EhClient {
     pub async fn archive_gallery(&self, url: &EhGalleryUrl) -> Result<()> {
         static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"or=(?P<or>[0-9a-z-]+)").unwrap());
 
-        let resp = send!(self.client.get(url.url()))?;
+        let resp = send!(self.0.get(url.url()))?;
         let html = Html::parse_document(&resp.text().await?);
         let onclick = html.select_attr("p.g2 a", "onclick").unwrap();
 
         let or = RE.captures(&onclick).and_then(|c| c.name("or")).unwrap().as_str();
 
         send!(self
-            .client
+            .0
             .post("https://exhentai.org/archiver.php")
             .query(&[("gid", &*url.id().to_string()), ("token", url.token()), ("or", or)])
             .form(&[("hathdl_xres", "org")]))?;
@@ -171,7 +163,7 @@ impl EhClient {
         // NOTE: 由于 Html 是 !Send 的，为了避免它被包含在 Future 上下文中，这里将它放在一个单独的作用域内
         // 参见：https://rust-lang.github.io/async-book/07_workarounds/03_send_approximation.html
         let (title, title_jp, parent, tags, favorite, mut pages, posted, mut next_page) = {
-            let resp = send!(self.client.get(url.url()))?;
+            let resp = send!(self.0.get(url.url()))?;
             let html = Html::parse_document(&resp.text().await?);
 
             // 英文标题、日文标题、父画廊
@@ -216,7 +208,7 @@ impl EhClient {
 
         while let Some(next_page_url) = &next_page {
             debug!(next_page_url);
-            let resp = send!(self.client.get(next_page_url))?;
+            let resp = send!(self.0.get(next_page_url))?;
             let html = Html::parse_document(&resp.text().await?);
             // 每一页的 URL
             pages.extend(html.select_attrs("div#gdt a", "href"));
@@ -245,7 +237,7 @@ impl EhClient {
     /// 获取画廊的某一页的图片的 fileindex 和实际地址和 nl
     #[tracing::instrument(skip(self))]
     pub async fn get_image_url(&self, page: &EhPageUrl) -> Result<(u32, String)> {
-        let resp = send!(self.client.get(&page.url()))?;
+        let resp = send!(self.0.get(&page.url()))?;
         let (original_url, url, nl, fileindex) = {
             let html = Html::parse_document(&resp.text().await?);
 
@@ -266,7 +258,7 @@ impl EhClient {
         if let Some(original_url) = original_url {
             debug!("发现原图链接: {}", original_url);
             // 获取302跳转后的真实URL
-            match self.client.get(&original_url).send().await {
+            match self.0.get(&original_url).send().await {
                 Ok(resp) => {
                     let final_url = resp.url().to_string();
                     debug!("原图跳转后的URL: {}", final_url);
@@ -290,10 +282,10 @@ impl EhClient {
         nl: Option<String>,
         fileindex: u32,
     ) -> Result<(u32, String)> {
-        if send!(self.client.head(&url)).is_ok() {
+        if send!(self.0.head(&url)).is_ok() {
             Ok((fileindex, url))
         } else if nl.is_some() {
-            let resp = send!(self.client.get(&page.with_nl(&nl.unwrap()).url()))?;
+            let resp = send!(self.0.get(&page.with_nl(&nl.unwrap()).url()))?;
             let html = Html::parse_document(&resp.text().await?);
             let url = html.select_attr("img#img", "src").unwrap();
             Ok((fileindex, url))
