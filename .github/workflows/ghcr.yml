@@ -3,7 +3,7 @@ name: Build and Push Docker Image
 on:
   push:
     branches:
-      - master
+      - main
 
 jobs:
   build:
@@ -16,18 +16,30 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
-          buildkitd-flags: --debug
           driver-opts: |
             image=moby/buildkit:latest
             network=host
 
-      - name: Cache Docker layers
+      # 使用 GitHub Actions 的缓存来存储 Rust 编译缓存
+      - name: Cache Rust dependencies
         uses: actions/cache@v4
         with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-buildx-
+            ${{ runner.os }}-cargo-
+
+      # 使用 sccache 缓存
+      - name: Cache sccache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/sccache
+          key: ${{ runner.os }}-sccache-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-sccache-
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v2
@@ -55,17 +67,10 @@ jobs:
             ghcr.io/${{ env.repo_name }}:latest
             ghcr.io/${{ env.repo_name }}:${{ env.date_tag }}
             ghcr.io/${{ env.repo_name }}:${{ env.git_sha }}
-          cache-from: |
-            type=local,src=/tmp/.buildx-cache
-            type=registry,ref=ghcr.io/${{ env.repo_name }}:latest
-          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+          cache-from: type=registry,ref=ghcr.io/${{ env.repo_name }}:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ env.repo_name }}:buildcache,mode=max
           platforms: linux/amd64
           build-args: |
             BUILDKIT_INLINE_CACHE=1
+            SCCACHE_DIR=/tmp/sccache
           outputs: type=registry,push=true
-
-      # 临时解决方案：将缓存移动到新位置
-      - name: Move cache
-        run: |
-          rm -rf /tmp/.buildx-cache
-          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
