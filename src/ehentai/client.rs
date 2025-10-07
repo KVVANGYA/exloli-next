@@ -482,13 +482,14 @@ impl EhClient {
             }
             
             // 使用统一的响应处理函数，并添加特殊调试
-            let content = Self::process_response(resp, "画廊页面").await?;
+            let mut content = Self::process_response(resp, "画廊页面").await?;
             
-            // 特殊调试：如果是画廊页面且内容为空，尝试分析原因
+            // 调试：如果是画廊页面且内容为空，输出详细信息
             if content.is_empty() {
-                error!("画廊页面返回空内容，请检查cookies是否过期或画廊是否存在");
+                error!("画廊页面返回空内容");
                 debug!("请求URL: {}", request_url);
                 debug!("响应头: {:?}", headers);
+                return Err(anyhow::anyhow!("画廊页面返回空内容，可能是cookie问题或服务器状态问题").into());
             }
             
             debug!("响应内容长度: {}", content.len());
