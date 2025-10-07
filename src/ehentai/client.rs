@@ -112,8 +112,18 @@ impl EhClient {
     #[tracing::instrument(skip(cookie))]
     pub async fn new(cookie: &str) -> Result<Self> {
         info!("登陆 E 站中");
+        
+        // 清理cookie字符串，移除换行符和多余空格，确保单行格式
+        // 这是关键修复：HTTP头不能包含换行符，否则服务器返回0字节响应
+        let cleaned_cookie = cookie
+            .replace('\n', "")
+            .replace('\r', "")
+            .trim()
+            .to_string();
+        
         // 将 cookie 日志级别改为 debug，避免在生产环境泄露敏感信息
-        debug!("初始 cookie: {}", cookie);
+        debug!("原始 cookie: {}", cookie);
+        debug!("清理后 cookie: {}", cleaned_cookie);
         
         // 设置完整的浏览器请求头，模拟真实浏览器行为
         let final_headers = headers! {
@@ -138,13 +148,13 @@ impl EhClient {
         let eh_client = Self(client);
         
         // 需要通过访问特定页面来补全cookie
-        debug!("开始cookie补全流程，基础cookie: {}", cookie);
+        debug!("开始cookie补全流程，基础cookie: {}", cleaned_cookie);
         
         // 步骤1: 访问首页设置基础cookie
         debug!("步骤1: 访问首页设置基础cookie");
         let initial_resp = eh_client.0
             .get("https://exhentai.org/")
-            .header(reqwest::header::COOKIE, cookie)
+            .header(reqwest::header::COOKIE, &cleaned_cookie)
             .send()
             .await;
             
