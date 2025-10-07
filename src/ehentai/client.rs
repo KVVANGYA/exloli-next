@@ -40,42 +40,55 @@ macro_rules! selector {
 pub struct EhClient(pub Client);
 
 impl EhClient {
-    /// 通用响应处理函数，处理zstd解压和内容验证
+    /// 通用响应处理函数，处理各种压缩格式和内容验证
     async fn process_response(response: reqwest::Response, page_name: &str) -> Result<String> {
         let headers = response.headers().clone();
-        let bytes = response.bytes().await?;
-        debug!("{} 响应字节长度: {}", page_name, bytes.len());
         
-        // 检查内容编码并尝试解压
-        let content = if let Some(encoding) = headers.get("content-encoding") {
-            let encoding_str = encoding.to_str().unwrap_or("");
+        // 检查内容编码
+        let encoding = headers.get("content-encoding").map(|h| h.to_str().unwrap_or(""));
+        if let Some(encoding_str) = encoding {
             debug!("{} 内容编码: {}", page_name, encoding_str);
-            
-            match encoding_str {
-                "zstd" => {
-                    if bytes.is_empty() {
-                        warn!("{} 收到空的zstd压缩数据", page_name);
-                        String::new()
-                    } else {
-                        match zstd::decode_all(&bytes[..]) {
-                            Ok(decompressed) => {
-                                debug!("{} zstd解压成功，解压后长度: {}", page_name, decompressed.len());
-                                String::from_utf8_lossy(&decompressed).to_string()
-                            }
-                            Err(e) => {
-                                warn!("{} zstd解压失败: {}，使用原始数据", page_name, e);
-                                String::from_utf8_lossy(&bytes).to_string()
-                            }
+        }
+        
+        // 对于zstd，我们需要手动处理，因为reqwest不支持
+        // 对于其他格式（gzip, deflate, br），让reqwest自动处理
+        let content = match encoding {
+            Some("zstd") => {
+                // zstd需要手动解压
+                let bytes = response.bytes().await?;
+                debug!("{} zstd压缩响应字节长度: {}", page_name, bytes.len());
+                
+                if bytes.is_empty() {
+                    warn!("{} 收到空的zstd压缩数据", page_name);
+                    String::new()
+                } else {
+                    match zstd::decode_all(&bytes[..]) {
+                        Ok(decompressed) => {
+                            debug!("{} zstd解压成功，解压后长度: {}", page_name, decompressed.len());
+                            String::from_utf8_lossy(&decompressed).to_string()
+                        }
+                        Err(e) => {
+                            warn!("{} zstd解压失败: {}，使用原始数据", page_name, e);
+                            String::from_utf8_lossy(&bytes).to_string()
                         }
                     }
                 }
-                _ => String::from_utf8_lossy(&bytes).to_string()
             }
-        } else {
-            String::from_utf8_lossy(&bytes).to_string()
+            _ => {
+                // 其他格式（包括br, gzip, deflate）由reqwest自动处理
+                match response.text().await {
+                    Ok(text) => {
+                        debug!("{} 响应内容长度: {} 字符（自动解压）", page_name, text.len());
+                        text
+                    }
+                    Err(e) => {
+                        warn!("{} 读取响应文本失败: {}", page_name, e);
+                        return Err(anyhow::anyhow!("读取响应内容失败: {}", e).into());
+                    }
+                }
+            }
         };
         
-        debug!("{} 解压后内容长度: {}", page_name, content.len());
         Ok(content)
     }
 
@@ -451,60 +464,8 @@ impl EhClient {
                 debug!("响应返回的 set-cookie 头: {:?}", cookie_headers);
             }
             
-            // 获取响应内容
-            let bytes = resp.bytes().await?;
-            debug!("响应字节长度: {}", bytes.len());
-            
-            // 检查内容编码并尝试解压
-            let content = if let Some(encoding) = headers.get("content-encoding") {
-                let encoding_str = encoding.to_str().unwrap_or("");
-                debug!("内容编码: {}", encoding_str);
-                
-                match encoding_str {
-                    "zstd" => {
-                        // 检查原始数据是否为空
-                        if bytes.is_empty() {
-                            warn!("收到空的zstd压缩数据");
-                            return Err(anyhow::anyhow!("服务器返回空的压缩数据，可能是访问被拒绝或cookie已过期").into());
-                        }
-                        
-                        // 尝试解压zstd内容
-                        match zstd::decode_all(&bytes[..]) {
-                            Ok(decompressed) => {
-                                debug!("zstd解压成功，解压后长度: {}", decompressed.len());
-                                
-                                // 如果解压后内容为空，这通常表示认证失败或被重定向
-                                if decompressed.is_empty() {
-                                    warn!("zstd解压后内容为空，可能是cookie无效或画廊已被删除");
-                                    // 尝试查看原始字节数据
-                                    debug!("原始压缩数据前32字节: {:?}", &bytes[..std::cmp::min(32, bytes.len())]);
-                                    return Err(anyhow::anyhow!("画廊可能已被删除或cookie已过期，服务器返回空内容").into());
-                                }
-                                
-                                String::from_utf8_lossy(&decompressed).to_string()
-                            }
-                            Err(e) => {
-                                warn!("zstd解压失败: {}，尝试使用原始数据", e);
-                                debug!("原始数据前32字节: {:?}", &bytes[..std::cmp::min(32, bytes.len())]);
-                                
-                                let raw_content = String::from_utf8_lossy(&bytes).to_string();
-                                if raw_content.trim().is_empty() {
-                                    return Err(anyhow::anyhow!("服务器返回空内容且无法解压，可能是cookie无效或画廊已被删除").into());
-                                }
-                                raw_content
-                            }
-                        }
-                    }
-                    "gzip" | "deflate" | "br" => {
-                        // 其他压缩格式应该由reqwest自动处理，如果到这里说明有问题
-                        warn!("收到未自动解压的{}格式数据", encoding_str);
-                        String::from_utf8_lossy(&bytes).to_string()
-                    }
-                    _ => String::from_utf8_lossy(&bytes).to_string()
-                }
-            } else {
-                String::from_utf8_lossy(&bytes).to_string()
-            };
+            // 使用统一的响应处理函数
+            let content = Self::process_response(resp, "画廊页面").await?;
             
             debug!("响应内容长度: {}", content.len());
             
