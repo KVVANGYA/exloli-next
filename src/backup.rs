@@ -113,18 +113,39 @@ impl BackupService {
         } else {
             "tar 未压缩包"
         };
-        
+
+        // 转义 MarkdownV2 特殊字符
+        let escaped_timestamp = datetime
+            .format("%Y-%m-%d %H:%M:%S UTC")
+            .to_string()
+            .replace("-", "\\-")
+            .replace(":", "\\:");
+
+        let escaped_path = dir_path
+            .display()
+            .to_string()
+            .replace("\\", "\\\\")
+            .replace("-", "\\-")
+            .replace(".", "\\.")
+            .replace("_", "\\_")
+            .replace(":", "\\:");
+
+        let escaped_format = format_info
+            .replace(".", "\\.");
+
+        let escaped_size = format!("{:.2}", size_mb).replace(".", "\\.");
+
         let caption = format!(
             "🗄️ *应用程序完整备份*
 
 📅 备份时间: {}
-📦 文件大小: {:.2} MB
+📦 文件大小: {} MB
 📁 备份内容: {} 目录完整备份
 🔧 格式: {}",
-            datetime.format("%Y\\--%m\\--%d %H:%M:%S UTC").to_string().replace("-", "\\-"),
-            size_mb,
-            dir_path.display().to_string().replace("-", "\\-").replace(".", "\\."),
-            format_info.replace(".", "\\.")
+            escaped_timestamp,
+            escaped_size,
+            escaped_path,
+            escaped_format
         );
 
         let input_file = InputFile::file(&backup_path);
@@ -382,6 +403,12 @@ impl BackupService {
             .replace("{", "\\{")
             .replace("}", "\\}");
             
+        let timestamp = chrono::Utc::now()
+            .format("%Y-%m-%d %H:%M:%S UTC")
+            .to_string()
+            .replace("-", "\\-")
+            .replace(":", "\\:");
+
         let notification = format!(
             "❌ *备份错误通知*
 
@@ -389,7 +416,7 @@ impl BackupService {
 📋 错误信息: {}
 
 🔧 请检查系统日志获取详细信息",
-            chrono::Utc::now().format("%Y\\--%m\\--%d %H:%M:%S UTC").to_string().replace("-", "\\-"),
+            timestamp,
             escaped_error
         );
 
