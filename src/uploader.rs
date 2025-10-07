@@ -6,6 +6,7 @@ use chrono::{Datelike, Utc};
 use futures::StreamExt;
 use regex::Regex;
 use reqwest::{Client, StatusCode};
+use scraper::{Html, Selector};
 use telegraph_rs::{html_to_node, Telegraph};
 use teloxide::prelude::*;
 use teloxide::types::MessageId;
@@ -335,7 +336,7 @@ impl ExloliUploader {
                             rx_guard.recv().await
                         };
                         
-                        let (page, (fileindex, url)) = match task {
+                        let (page, (fileindex, original_url)) = match task {
                             Some(data) => data,
                             None => break, // 没有更多任务
                         };
@@ -343,15 +344,29 @@ impl ExloliUploader {
                         // 获取信号量许可，控制并发
                         let _permit = sem.acquire().await.unwrap();
 
-                        let suffix = url.split('.').last().unwrap_or("jpg");
+                        // 首先尝试获取预览图URL作为备选方案
+                        let preview_url = match client.get(&page.url()).send().await {
+                            Ok(response) => {
+                                let html_text = response.text().await.unwrap_or_default();
+                                let html = Html::parse_document(&html_text);
+                                let selector = Selector::parse("img#img").unwrap();
+                                html.select(&selector)
+                                    .next()
+                                    .and_then(|ele| ele.value().attr("src"))
+                                    .map(|s| s.to_string())
+                            }
+                            Err(_) => None,
+                        };
+
+                        let suffix = original_url.split('.').last().unwrap_or("jpg");
 
                         // 先获取 Content-Length 检查文件大小
-                        let should_compress = match client.head(&url).send().await {
+                        let should_compress = match client.head(&original_url).send().await {
                             Ok(response) => {
                                 if let Some(content_length) = response.headers().get("content-length") {
                                     if let Ok(size_str) = content_length.to_str() {
                                         if let Ok(size) = size_str.parse::<usize>() {
-                                            let should_compress = size > 1_000_000; // 超过 1MB
+                                            let should_compress = size > 2_000_000; // 2MB
                                             if should_compress {
                                                 debug!("图片 {} 大小 {} bytes，使用 WebP 压缩", page.page(), size);
                                             }
@@ -365,31 +380,60 @@ impl ExloliUploader {
 
                         // 根据文件大小决定是否使用 WebP 压缩
                         // 使用 ll 参数启用无损压缩
-                        let (download_url, filename) = if should_compress {
-                            let webp_url = format!("https://images.weserv.nl/?url={}&output=webp&ll&n=-1",
-                                urlencoding::encode(&url));
-                            (webp_url, format!("{}.webp", page.hash()))
+                        let (download_url, filename, use_compressed) = if should_compress {
+                            let webp_url = format!("https://images.weserv.nl/?url={}&output=webp&n=-1&w=2560&h=2560",
+                                urlencoding::encode(&original_url));
+                            (webp_url, format!("{}.webp", page.hash()), true)
                         } else {
-                            (url.clone(), format!("{}.{}", page.hash(), suffix))
+                            (original_url.clone(), format!("{}.{}", page.hash(), suffix), false)
                         };
 
                         // 下载图片
-                        let bytes = match client.get(&download_url).send().await {
+                        let mut bytes = match client.get(&download_url).send().await {
                             Ok(response) => match response.bytes().await {
-                                Ok(bytes) => bytes,
+                                Ok(bytes) => Some(bytes),
                                 Err(e) => {
                                     error!("下载图片失败 {}: {}", page.page(), e);
-                                    return Err(anyhow!("下载图片失败 {}: {}", page.page(), e));
+                                    None
                                 }
                             },
                             Err(e) => {
                                 error!("请求图片失败 {}: {}", page.page(), e);
-                                return Err(anyhow!("请求图片失败 {}: {}", page.page(), e));
+                                None
                             }
                         };
-                        debug!("已下载: {} ({}, {} bytes)", page.page(),
-                            if should_compress { "WebP" } else { suffix },
-                            bytes.len());
+
+                        // 如果压缩图片下载失败且有预览图，则尝试使用预览图
+                        let (final_bytes, final_filename, used_preview) = if bytes.is_none() && use_compressed && preview_url.is_some() {
+                            let preview = preview_url.unwrap();
+                            debug!("压缩图片失败，尝试使用预览图: {}", preview);
+                            match client.get(&preview).send().await {
+                                Ok(response) => match response.bytes().await {
+                                    Ok(preview_bytes) => {
+                                        let preview_suffix = preview.split('.').last().unwrap_or("jpg");
+                                        (Some(preview_bytes), format!("{}_preview.{}", page.hash(), preview_suffix), true)
+                                    },
+                                    Err(e) => {
+                                        error!("下载预览图失败 {}: {}", page.page(), e);
+                                        return Err(anyhow!("下载预览图失败 {}: {}", page.page(), e));
+                                    }
+                                },
+                                Err(e) => {
+                                    error!("请求预览图失败 {}: {}", page.page(), e);
+                                    return Err(anyhow!("请求预览图失败 {}: {}", page.page(), e));
+                                }
+                            }
+                        } else if let Some(b) = bytes {
+                            (Some(b), filename, false)
+                        } else {
+                            return Err(anyhow!("下载图片失败 {}: 无法获取任何可用图片", page.page()));
+                        };
+
+                        let bytes = final_bytes.unwrap();
+                        debug!("已下载: {} ({}, {} bytes) {}", page.page(),
+                            if used_preview { "预览图" } else if use_compressed { "WebP" } else { suffix },
+                            bytes.len(),
+                            if used_preview { "（备选方案）" } else { "" });
 
                         // 更新下载进度
                         if let Some(ref callback) = callback_clone {
@@ -399,14 +443,14 @@ impl ExloliUploader {
                         }
 
                         // 上传到 S3
-                        let upload_url = match s3_clone.upload(&filename, &mut bytes.as_ref()).await {
+                        let upload_url = match s3_clone.upload(&final_filename, &mut bytes.as_ref()).await {
                             Ok(url) => url,
                             Err(e) => {
                                 error!("上传图片失败 {}: {}", page.page(), e);
                                 return Err(anyhow!("上传图片失败 {}: {}", page.page(), e));
                             }
                         };
-                        debug!("已上传: {}", page.page());
+                        debug!("已上传: {} {}", page.page(), if used_preview { "（预览图）" } else { "" });
 
                         // 更新上传进度
                         if let Some(ref callback) = callback_clone {
