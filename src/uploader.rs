@@ -415,8 +415,8 @@ impl ExloliUploader {
 
                         // 下载图片（带重试机制）
                         let bytes = retry_with_backoff(3, || async {
-                            client.get(&download_url).send().await
-                                .and_then(|r| async move { r.bytes().await })
+                            let response = client.get(&download_url).send().await?;
+                            response.bytes().await
                         }).await.map_err(|e| {
                             error!("下载图片失败 {}: {}", page.page(), e);
                             e
@@ -427,8 +427,8 @@ impl ExloliUploader {
                             let preview = preview_url.unwrap();
                             debug!("压缩图片失败，尝试使用预览图: {}", preview);
                             match retry_with_backoff(3, || async {
-                                client.get(&preview).send().await
-                                    .and_then(|r| async move { r.bytes().await })
+                                let response = client.get(&preview).send().await?;
+                                response.bytes().await
                             }).await {
                                 Ok(preview_bytes) => {
                                     let preview_suffix = preview.split('.').last().unwrap_or("jpg");
