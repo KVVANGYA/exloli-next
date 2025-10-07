@@ -37,7 +37,10 @@ macro_rules! selector {
 }
 
 #[derive(Debug, Clone)]
-pub struct EhClient(pub Client);
+pub struct EhClient {
+    pub client: Client,
+    pub cookie: String,
+}
 
 impl EhClient {
     /// 通用响应处理函数，处理各种压缩格式和内容验证
@@ -145,14 +148,17 @@ impl EhClient {
             .connect_timeout(Duration::from_secs(30))
             .build()?;
 
-        let eh_client = Self(client);
+        let eh_client = Self {
+            client: client.clone(),
+            cookie: cleaned_cookie.clone(),
+        };
         
         // 需要通过访问特定页面来补全cookie
         debug!("开始cookie补全流程，基础cookie: {}", cleaned_cookie);
         
         // 步骤1: 访问首页设置基础cookie
         debug!("步骤1: 访问首页设置基础cookie");
-        let initial_resp = eh_client.0
+        let initial_resp = eh_client.client
             .get("https://exhentai.org/")
             .header(reqwest::header::COOKIE, &cleaned_cookie)
             .send()
@@ -200,7 +206,7 @@ impl EhClient {
         
         // 步骤2: 访问 /uconfig.php 获取用户配置相关cookie
         debug!("步骤2: 访问 /uconfig.php 补全cookie");
-        let uconfig_resp = eh_client.0
+        let uconfig_resp = eh_client.client
             .get("https://exhentai.org/uconfig.php")
             .header("referer", "https://exhentai.org/")
             .header(reqwest::header::COOKIE, &cleaned_cookie)
@@ -245,7 +251,7 @@ impl EhClient {
         
         // 步骤3: 访问 /mytags 获取标签相关cookie
         debug!("步骤3: 访问 /mytags 补全cookie");
-        let mytags_resp = eh_client.0
+        let mytags_resp = eh_client.client
             .get("https://exhentai.org/mytags")
             .header("referer", "https://exhentai.org/")
             .header(reqwest::header::COOKIE, &cleaned_cookie)
@@ -290,7 +296,7 @@ impl EhClient {
         
         // 步骤4: 最终验证 - 再次访问首页确认cookie完整性
         debug!("步骤4: 最终验证cookie完整性");
-        let final_resp = eh_client.0
+        let final_resp = eh_client.client
             .get("https://exhentai.org/")
             .header(reqwest::header::COOKIE, &cleaned_cookie)
             .send()
@@ -354,7 +360,8 @@ impl EhClient {
         debug!("发送请求: {}", full_url);
         
         // 创建请求构建器并添加调试信息
-        let request_builder = self.0.get(url).query(params).query(&[("next", next)]);
+        let request_builder = self.client.get(url).query(params).query(&[("next", next)])
+            .header(reqwest::header::COOKIE, &self.cookie);
         debug!("请求构建器创建完成");
         
         let resp = send!(request_builder)?;
@@ -436,7 +443,7 @@ impl EhClient {
 
         let archive_url = "https://exhentai.org/archiver.php";
         debug!("发送请求: {}", archive_url);
-        let resp = send!(self.0.get(url.url()))?;
+        let resp = send!(self.client.get(url.url()))?;
         let html = Html::parse_document(&resp.text().await?);
         let onclick = html.select_attr("p.g2 a", "onclick").unwrap();
 
@@ -444,7 +451,7 @@ impl EhClient {
 
         debug!("发送请求: {}?gid={}&token={}&or={}", archive_url, url.id(), url.token(), or);
         send!(self
-            .0
+            .client
             .post(archive_url)
             .query(&[("gid", &*url.id().to_string()), ("token", url.token()), ("or", or)])
             .form(&[("hathdl_xres", "org")]))?;
@@ -461,9 +468,11 @@ impl EhClient {
             
             // 添加更多调试信息
             let request_url = url.url();
-            let request = self.0.get(&request_url);
+            let request = self.client.get(&request_url)
+                .header(reqwest::header::COOKIE, &self.cookie);
             
             debug!("准备发送请求到: {}", request_url);
+            debug!("使用cookie: {}", &self.cookie);
             
             // 发送请求并获取响应
             let resp = send!(request)?;
@@ -595,7 +604,7 @@ impl EhClient {
 
         while let Some(next_page_url) = &next_page {
             debug!("发送请求: {}", next_page_url);
-            let resp = send!(self.0.get(next_page_url))?;
+            let resp = send!(self.client.get(next_page_url))?;
             let html = Html::parse_document(&resp.text().await?);
             // 每一页的 URL
             pages.extend(html.select_attrs("div#gdt a", "href"));
@@ -625,7 +634,7 @@ impl EhClient {
     #[tracing::instrument(skip(self))]
     pub async fn get_image_url(&self, page: &EhPageUrl) -> Result<(u32, String)> {
         debug!("发送请求: {}", page.url());
-        let resp = send!(self.0.get(&page.url()))?;
+        let resp = send!(self.client.get(&page.url()))?;
         let (original_url, url, nl, fileindex) = {
             let html = Html::parse_document(&resp.text().await?);
 
@@ -646,7 +655,7 @@ impl EhClient {
         if let Some(original_url) = original_url {
             debug!("发现原图链接: {}", original_url);
             // 获取302跳转后的真实URL
-            match self.0.get(&original_url).send().await {
+            match self.client.get(&original_url).send().await {
                 Ok(resp) => {
                     let final_url = resp.url().to_string();
                     debug!("原图跳转后的URL: {}", final_url);
@@ -671,12 +680,12 @@ impl EhClient {
         fileindex: u32,
     ) -> Result<(u32, String)> {
         debug!("发送 HEAD 请求: {}", url);
-        if send!(self.0.head(&url)).is_ok() {
+        if send!(self.client.head(&url)).is_ok() {
             Ok((fileindex, url))
         } else if let Some(nl) = &nl {
             let page_with_nl = page.with_nl(nl);
             debug!("发送请求: {}", page_with_nl.url());
-            let resp = send!(self.0.get(&page_with_nl.url()))?;
+            let resp = send!(self.client.get(&page_with_nl.url()))?;
             let html = Html::parse_document(&resp.text().await?);
             let url = html.select_attr("img#img", "src").unwrap();
             Ok((fileindex, url))

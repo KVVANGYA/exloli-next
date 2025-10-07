@@ -326,7 +326,7 @@ impl ExloliUploader {
             let s3_clone = s3.clone();
             
             // 使用EhClient而不是创建新的Client，以确保携带正确的cookie
-            let client = self.ehentai.0.clone(); // 获取内部的reqwest::Client
+            let client = self.ehentai.client.clone(); // 获取内部的reqwest::Client
             
             let handle = tokio::spawn(
                 async move {
