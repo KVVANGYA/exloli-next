@@ -496,12 +496,137 @@ impl ExloliUploader {
 
     /// 从数据库中读取某个画廊的所有图片，生成一篇 telegraph 文章
     /// 为了防止画廊被删除后无法更新，此处不应该依赖 EhGallery
+    /// 如果图片数量过多，会创建多个分页文章并返回第一页
     async fn publish_telegraph_article<T: GalleryInfo>(
         &self,
         gallery: &T,
     ) -> Result<telegraph_rs::Page> {
         let images = ImageEntity::get_by_gallery_id(gallery.url().id()).await?;
-
+        
+        // Telegraph 单页最大图片数量限制 (约50KB内容限制，每个img标签约100-200字节)
+        const MAX_IMAGES_PER_PAGE: usize = 200;
+        
+        if images.len() <= MAX_IMAGES_PER_PAGE {
+            // 图片数量不多，创建单页文章
+            return self.create_single_telegraph_page(gallery, &images).await;
+        }
+        
+        // 图片数量过多，需要分页处理
+        info!("画廊 {} 有 {} 张图片，需要分页处理", gallery.url().id(), images.len());
+        
+        let total_pages = (images.len() + MAX_IMAGES_PER_PAGE - 1) / MAX_IMAGES_PER_PAGE;
+        let mut created_pages = Vec::new();
+        
+        for (page_idx, image_chunk) in images.chunks(MAX_IMAGES_PER_PAGE).enumerate() {
+            let page_num = page_idx + 1;
+            let page_title = if total_pages > 1 {
+                format!("{} (第{}页/共{}页)", gallery.title_jp(), page_num, total_pages)
+            } else {
+                gallery.title_jp()
+            };
+            
+            let mut html = String::new();
+            
+            // 只在第一页显示封面
+            if page_idx == 0 && gallery.cover() != 0 && gallery.cover() < images.len() {
+                html.push_str(&format!(r#"<img src="{}">"#, images[gallery.cover()].url()));
+            }
+            
+            // 添加分页导航（除第一页外）
+            if page_idx > 0 && !created_pages.is_empty() {
+                html.push_str(&format!(r#"<p><a href="{}">← 返回第1页</a></p>"#, created_pages[0].url));
+            }
+            
+            // 添加当前页图片
+            for img in image_chunk {
+                html.push_str(&format!(r#"<img src="{}">"#, img.url()));
+            }
+            
+            // 添加页面信息和导航
+            if total_pages > 1 {
+                html.push_str(&format!("<p>第{}页/共{}页 (图片总数：{})</p>", page_num, total_pages, images.len()));
+                
+                // 添加下一页链接占位符（将在创建下一页后更新）
+                if page_idx < total_pages - 1 {
+                    html.push_str("<p>下一页链接将在创建后添加</p>");
+                }
+            } else {
+                html.push_str(&format!("<p>图片总数：{}</p>", gallery.pages()));
+            }
+            
+            let node = html_to_node(&html);
+            let page = self.telegraph.create_page(&page_title, &node, false).await?;
+            
+            debug!("创建Telegraph分页 {}/{}：{}", page_num, total_pages, page.url);
+            created_pages.push(page);
+        }
+        
+        // 更新页面间的导航链接
+        if created_pages.len() > 1 {
+            for (idx, page) in created_pages.iter().enumerate() {
+                let page_num = idx + 1;
+                let mut html = String::new();
+                
+                // 重新构建HTML内容，添加正确的导航链接
+                if idx == 0 && gallery.cover() != 0 && gallery.cover() < images.len() {
+                    html.push_str(&format!(r#"<img src="{}">"#, images[gallery.cover()].url()));
+                }
+                
+                // 导航链接
+                let mut nav_links = Vec::new();
+                if idx > 0 {
+                    nav_links.push(format!(r#"<a href="{}">← 上一页</a>"#, created_pages[idx - 1].url));
+                }
+                if idx == 0 && created_pages.len() > 1 {
+                    nav_links.push(format!(r#"<a href="{}">下一页 →</a>"#, created_pages[1].url));
+                }
+                if idx < created_pages.len() - 1 && idx > 0 {
+                    nav_links.push(format!(r#"<a href="{}">下一页 →</a>"#, created_pages[idx + 1].url));
+                }
+                
+                if !nav_links.is_empty() {
+                    html.push_str(&format!("<p>{}</p>", nav_links.join(" | ")));
+                }
+                
+                // 添加当前页图片
+                let start_idx = idx * MAX_IMAGES_PER_PAGE;
+                let end_idx = std::cmp::min(start_idx + MAX_IMAGES_PER_PAGE, images.len());
+                for img in &images[start_idx..end_idx] {
+                    html.push_str(&format!(r#"<img src="{}">"#, img.url()));
+                }
+                
+                // 页面信息
+                html.push_str(&format!("<p>第{}页/共{}页 (图片总数：{})</p>", page_num, created_pages.len(), images.len()));
+                
+                // 底部导航
+                if !nav_links.is_empty() {
+                    html.push_str(&format!("<p>{}</p>", nav_links.join(" | ")));
+                }
+                
+                let node = html_to_node(&html);
+                let page_title = if created_pages.len() > 1 {
+                    format!("{} (第{}页/共{}页)", gallery.title_jp(), page_num, created_pages.len())
+                } else {
+                    gallery.title_jp()
+                };
+                
+                // 更新页面内容
+                if let Err(e) = self.telegraph.edit_page(&page.path, &page_title, &node).await {
+                    error!("更新Telegraph分页 {} 导航失败: {}", page_num, e);
+                }
+            }
+        }
+        
+        // 返回第一页
+        Ok(created_pages.into_iter().next().unwrap())
+    }
+    
+    /// 创建单页Telegraph文章
+    async fn create_single_telegraph_page<T: GalleryInfo>(
+        &self,
+        gallery: &T,
+        images: &[ImageEntity],
+    ) -> Result<telegraph_rs::Page> {
         let mut html = String::new();
         if gallery.cover() != 0 && gallery.cover() < images.len() {
             html.push_str(&format!(r#"<img src="{}">"#, images[gallery.cover()].url()))
@@ -512,7 +637,6 @@ impl ExloliUploader {
         html.push_str(&format!("<p>图片总数：{}</p>", gallery.pages()));
 
         let node = html_to_node(&html);
-        // 文章标题优先使用日文
         let title = gallery.title_jp();
         Ok(self.telegraph.create_page(&title, &node, false).await?)
     }
