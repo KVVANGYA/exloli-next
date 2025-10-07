@@ -40,6 +40,45 @@ macro_rules! selector {
 pub struct EhClient(pub Client);
 
 impl EhClient {
+    /// 通用响应处理函数，处理zstd解压和内容验证
+    async fn process_response(response: reqwest::Response, page_name: &str) -> Result<String> {
+        let headers = response.headers().clone();
+        let bytes = response.bytes().await?;
+        debug!("{} 响应字节长度: {}", page_name, bytes.len());
+        
+        // 检查内容编码并尝试解压
+        let content = if let Some(encoding) = headers.get("content-encoding") {
+            let encoding_str = encoding.to_str().unwrap_or("");
+            debug!("{} 内容编码: {}", page_name, encoding_str);
+            
+            match encoding_str {
+                "zstd" => {
+                    if bytes.is_empty() {
+                        warn!("{} 收到空的zstd压缩数据", page_name);
+                        String::new()
+                    } else {
+                        match zstd::decode_all(&bytes[..]) {
+                            Ok(decompressed) => {
+                                debug!("{} zstd解压成功，解压后长度: {}", page_name, decompressed.len());
+                                String::from_utf8_lossy(&decompressed).to_string()
+                            }
+                            Err(e) => {
+                                warn!("{} zstd解压失败: {}，使用原始数据", page_name, e);
+                                String::from_utf8_lossy(&bytes).to_string()
+                            }
+                        }
+                    }
+                }
+                _ => String::from_utf8_lossy(&bytes).to_string()
+            }
+        } else {
+            String::from_utf8_lossy(&bytes).to_string()
+        };
+        
+        debug!("{} 解压后内容长度: {}", page_name, content.len());
+        Ok(content)
+    }
+
     #[tracing::instrument(skip(cookie))]
     pub async fn new(cookie: &str) -> Result<Self> {
         info!("登陆 E 站中");
@@ -96,11 +135,11 @@ impl EhClient {
                 }
                 
                 // 读取响应内容验证
-                match response.text().await {
+                match Self::process_response(response, "首页").await {
                     Ok(content) => {
                         if content.len() < 1000 {
                             warn!("首页响应内容过短: {} 字符，可能是cookie失效", content.len());
-                            debug!("首页响应内容: {:?}", content);
+                            debug!("首页响应内容: {:?}", &content[..std::cmp::min(200, content.len())]);
                             if content.contains("location.replace") || content.contains("bounce_login") {
                                 return Err(anyhow::anyhow!("基础Cookie无效，首页收到重定向响应").into());
                             }
@@ -136,10 +175,10 @@ impl EhClient {
                 }
                 
                 // 检查响应内容
-                match response.text().await {
+                match Self::process_response(response, "uconfig.php").await {
                     Ok(content) => {
                         if content.len() < 100 {
-                            warn!("uconfig.php 响应内容过短: {} 字符，内容: {:?}", content.len(), content);
+                            warn!("uconfig.php 响应内容过短: {} 字符，内容: {:?}", content.len(), &content[..std::cmp::min(50, content.len())]);
                             if content.contains("location.replace") || content.contains("bounce_login") {
                                 warn!("uconfig.php 重定向到登录页面，这可能影响cookie完整性");
                             }
@@ -177,10 +216,10 @@ impl EhClient {
                 }
                 
                 // 检查响应内容
-                match response.text().await {
+                match Self::process_response(response, "mytags").await {
                     Ok(content) => {
                         if content.len() < 100 {
-                            warn!("mytags 响应内容过短: {} 字符，内容: {:?}", content.len(), content);
+                            warn!("mytags 响应内容过短: {} 字符，内容: {:?}", content.len(), &content[..std::cmp::min(50, content.len())]);
                             if content.contains("location.replace") || content.contains("bounce_login") {
                                 warn!("mytags 重定向到登录页面，这可能影响cookie完整性");
                             }
@@ -217,10 +256,10 @@ impl EhClient {
                     return Err(anyhow::anyhow!("Cookie补全后仍然无效，被重定向到登录页面").into());
                 }
                 
-                match response.text().await {
+                match Self::process_response(response, "最终验证").await {
                     Ok(content) => {
                         if content.len() < 1000 {
-                            debug!("最终验证响应内容: {:?}", content);
+                            debug!("最终验证响应内容: {:?}", &content[..std::cmp::min(200, content.len())]);
                             // 检查是否是JavaScript重定向
                             if content.contains("location.replace") || content.contains("window.location") {
                                 return Err(anyhow::anyhow!("Cookie补全失败，收到重定向响应: {}", content).into());
@@ -229,7 +268,7 @@ impl EhClient {
                             if content.contains("bounce_login") {
                                 return Err(anyhow::anyhow!("Cookie补全失败，被重定向到登录页面").into());
                             }
-                            return Err(anyhow::anyhow!("Cookie补全失败，最终验证响应内容过短: {} 字符，内容: {:?}", content.len(), content).into());
+                            return Err(anyhow::anyhow!("Cookie补全失败，最终验证响应内容过短: {} 字符，内容前200字符: {:?}", content.len(), &content[..std::cmp::min(200, content.len())]).into());
                         } else {
                             info!("Cookie补全成功，最终验证通过，响应长度: {} 字符", content.len());
                         }
