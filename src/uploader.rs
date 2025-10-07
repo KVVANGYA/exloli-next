@@ -389,7 +389,7 @@ impl ExloliUploader {
                         };
 
                         // 下载图片
-                        let mut bytes = match client.get(&download_url).send().await {
+                        let bytes = match client.get(&download_url).send().await {
                             Ok(response) => match response.bytes().await {
                                 Ok(bytes) => Some(bytes),
                                 Err(e) => {
@@ -515,7 +515,7 @@ impl ExloliUploader {
         info!("画廊 {} 有 {} 张图片，需要分页处理", gallery.url().id(), images.len());
         
         let total_pages = (images.len() + MAX_IMAGES_PER_PAGE - 1) / MAX_IMAGES_PER_PAGE;
-        let mut created_pages = Vec::new();
+        let mut created_pages: Vec<telegraph_rs::Page> = Vec::new();
         
         for (page_idx, image_chunk) in images.chunks(MAX_IMAGES_PER_PAGE).enumerate() {
             let page_num = page_idx + 1;
@@ -611,7 +611,7 @@ impl ExloliUploader {
                 };
                 
                 // 更新页面内容
-                if let Err(e) = self.telegraph.edit_page(&page.path, &page_title, &node).await {
+                if let Err(e) = self.telegraph.edit_page(&page.path, &page_title, &node, false).await {
                     error!("更新Telegraph分页 {} 导航失败: {}", page_num, e);
                 }
             }
