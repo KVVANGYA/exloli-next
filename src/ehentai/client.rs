@@ -203,6 +203,7 @@ impl EhClient {
         let uconfig_resp = eh_client.0
             .get("https://exhentai.org/uconfig.php")
             .header("referer", "https://exhentai.org/")
+            .header(reqwest::header::COOKIE, &cleaned_cookie)
             .send()
             .await;
             
@@ -247,6 +248,7 @@ impl EhClient {
         let mytags_resp = eh_client.0
             .get("https://exhentai.org/mytags")
             .header("referer", "https://exhentai.org/")
+            .header(reqwest::header::COOKIE, &cleaned_cookie)
             .send()
             .await;
             
@@ -290,6 +292,7 @@ impl EhClient {
         debug!("步骤4: 最终验证cookie完整性");
         let final_resp = eh_client.0
             .get("https://exhentai.org/")
+            .header(reqwest::header::COOKIE, &cleaned_cookie)
             .send()
             .await;
             
