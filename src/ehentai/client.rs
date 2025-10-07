@@ -9,11 +9,35 @@ use scraper::{Html, Selector};
 use serde::Serialize;
 use std::fmt::Debug;
 use std::time::Duration;
-use tracing::{debug, error, info, Instrument};
+use tracing::{debug, error, info, warn, Instrument};
 
 use super::error::*;
 use super::types::*;
 use crate::utils::html::SelectorExtend;
+
+/// 带指数退避的重试机制  
+async fn retry_request<T, F, Fut>(max_retries: usize, mut func: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let mut attempts = 0;
+    loop {
+        match func().await {
+            Ok(result) => return Ok(result),
+            Err(err) => {
+                attempts += 1;
+                if attempts >= max_retries {
+                    return Err(err);
+                }
+                
+                let delay = Duration::from_millis(1000 * (1 << attempts)); // 1s, 2s, 4s...
+                warn!("请求失败 (尝试 {}/{}): {}, {}ms 后重试", attempts, max_retries, err, delay.as_millis());
+                tokio::time::sleep(delay).await;
+            }
+        }
+    }
+}
 
 macro_rules! headers {
     ($($k:ident => $v:expr), *) => {{
@@ -232,7 +256,9 @@ impl EhClient {
     /// 获取画廊的某一页的图片的 fileindex 和实际地址和 nl
     #[tracing::instrument(skip(self))]
     pub async fn get_image_url(&self, page: &EhPageUrl) -> Result<(u32, String)> {
-        let resp = send!(self.0.get(&page.url()))?;
+        let resp = retry_request(3, || async {
+            send!(self.0.get(&page.url())).map_err(|e| e.into())
+        }).await?;
         let (original_url, url, nl, fileindex) = {
             let html = Html::parse_document(&resp.text().await?);
 

@@ -13,7 +13,7 @@ use teloxide::types::MessageId;
 use teloxide::utils::html::{code_inline, link};
 use tokio::task::JoinHandle;
 use tokio::time;
-use tracing::{debug, error, info, Instrument};
+use tracing::{debug, error, info, warn, Instrument};
 
 use crate::bot::Bot;
 use crate::config::Config;
@@ -24,6 +24,31 @@ use crate::ehentai::{EhClient, EhGallery, EhGalleryUrl, GalleryInfo};
 use crate::s3::S3Uploader;
 use crate::tags::EhTagTransDB;
 use crate::utils::pad_left;
+
+/// 带指数退避的重试机制
+async fn retry_with_backoff<T, E, F, Fut>(max_retries: usize, mut func: F) -> Result<T, E>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, E>>,
+    E: std::fmt::Display,
+{
+    let mut attempts = 0;
+    loop {
+        match func().await {
+            Ok(result) => return Ok(result),
+            Err(err) => {
+                attempts += 1;
+                if attempts >= max_retries {
+                    return Err(err);
+                }
+                
+                let delay = Duration::from_millis(500 * (1 << attempts)); // 指数退避: 1s, 2s, 4s...
+                warn!("操作失败 (尝试 {}/{}): {}, {}ms 后重试", attempts, max_retries, err, delay.as_millis());
+                time::sleep(delay).await;
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct UploadProgress {
@@ -388,39 +413,30 @@ impl ExloliUploader {
                             (original_url.clone(), format!("{}.{}", page.hash(), suffix), false)
                         };
 
-                        // 下载图片
-                        let bytes = match client.get(&download_url).send().await {
-                            Ok(response) => match response.bytes().await {
-                                Ok(bytes) => Some(bytes),
-                                Err(e) => {
-                                    error!("下载图片失败 {}: {}", page.page(), e);
-                                    None
-                                }
-                            },
-                            Err(e) => {
-                                error!("请求图片失败 {}: {}", page.page(), e);
-                                None
-                            }
-                        };
+                        // 下载图片（带重试机制）
+                        let bytes = retry_with_backoff(3, || async {
+                            client.get(&download_url).send().await
+                                .and_then(|r| async move { r.bytes().await })
+                        }).await.map_err(|e| {
+                            error!("下载图片失败 {}: {}", page.page(), e);
+                            e
+                        }).ok();
 
                         // 如果压缩图片下载失败且有预览图，则尝试使用预览图
                         let (final_bytes, final_filename, used_preview) = if bytes.is_none() && use_compressed && preview_url.is_some() {
                             let preview = preview_url.unwrap();
                             debug!("压缩图片失败，尝试使用预览图: {}", preview);
-                            match client.get(&preview).send().await {
-                                Ok(response) => match response.bytes().await {
-                                    Ok(preview_bytes) => {
-                                        let preview_suffix = preview.split('.').last().unwrap_or("jpg");
-                                        (Some(preview_bytes), format!("{}_preview.{}", page.hash(), preview_suffix), true)
-                                    },
-                                    Err(e) => {
-                                        error!("下载预览图失败 {}: {}", page.page(), e);
-                                        return Err(anyhow!("下载预览图失败 {}: {}", page.page(), e));
-                                    }
+                            match retry_with_backoff(3, || async {
+                                client.get(&preview).send().await
+                                    .and_then(|r| async move { r.bytes().await })
+                            }).await {
+                                Ok(preview_bytes) => {
+                                    let preview_suffix = preview.split('.').last().unwrap_or("jpg");
+                                    (Some(preview_bytes), format!("{}_preview.{}", page.hash(), preview_suffix), true)
                                 },
                                 Err(e) => {
-                                    error!("请求预览图失败 {}: {}", page.page(), e);
-                                    return Err(anyhow!("请求预览图失败 {}: {}", page.page(), e));
+                                    error!("下载预览图失败 {}: {}", page.page(), e);
+                                    return Err(anyhow!("下载预览图失败 {}: {}", page.page(), e));
                                 }
                             }
                         } else if let Some(b) = bytes {
