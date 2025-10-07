@@ -62,13 +62,19 @@ impl EhClient {
                     warn!("{} 收到空的zstd压缩数据", page_name);
                     String::new()
                 } else {
+                    debug!("{} zstd原始数据: {:?}", page_name, &bytes[..std::cmp::min(32, bytes.len())]);
                     match zstd::decode_all(&bytes[..]) {
                         Ok(decompressed) => {
                             debug!("{} zstd解压成功，解压后长度: {}", page_name, decompressed.len());
+                            if decompressed.is_empty() && page_name.contains("画廊") {
+                                warn!("{} zstd解压后内容为空，这可能表示画廊已被删除或访问权限问题", page_name);
+                                warn!("原始zstd数据: {:?}", bytes);
+                            }
                             String::from_utf8_lossy(&decompressed).to_string()
                         }
                         Err(e) => {
                             warn!("{} zstd解压失败: {}，使用原始数据", page_name, e);
+                            warn!("失败的zstd数据: {:?}", &bytes[..std::cmp::min(32, bytes.len())]);
                             String::from_utf8_lossy(&bytes).to_string()
                         }
                     }
@@ -98,10 +104,10 @@ impl EhClient {
         // 将 cookie 日志级别改为 debug，避免在生产环境泄露敏感信息
         debug!("初始 cookie: {}", cookie);
         
-        // 设置请求头（添加更多浏览器标准头，让reqwest自动管理cookie）
+        // 设置请求头（移除zstd支持，使用浏览器标准压缩格式）
         let final_headers = headers! {
             ACCEPT => "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-            ACCEPT_ENCODING => "gzip, deflate, br, zstd", 
+            ACCEPT_ENCODING => "gzip, deflate, br", 
             ACCEPT_LANGUAGE => "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
             CACHE_CONTROL => "no-cache",
             PRAGMA => "no-cache",
