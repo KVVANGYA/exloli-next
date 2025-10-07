@@ -85,6 +85,17 @@ impl EhClient {
                 match response.text().await {
                     Ok(text) => {
                         debug!("{} 响应内容长度: {} 字符（自动解压）", page_name, text.len());
+                        
+                        // 特殊调试：如果是画廊页面且内容为空，输出更多信息
+                        if text.is_empty() && page_name.contains("画廊") {
+                            warn!("{} 自动解压后内容为空，可能是服务器返回空响应", page_name);
+                            if let Some(encoding_str) = encoding {
+                                debug!("内容编码为: {}", encoding_str);
+                            } else {
+                                debug!("没有内容编码头");
+                            }
+                        }
+                        
                         text
                     }
                     Err(e) => {
@@ -104,7 +115,7 @@ impl EhClient {
         // 将 cookie 日志级别改为 debug，避免在生产环境泄露敏感信息
         debug!("初始 cookie: {}", cookie);
         
-        // 设置请求头（移除zstd支持，使用浏览器标准压缩格式）
+        // 设置完整的浏览器请求头，模拟真实浏览器行为
         let final_headers = headers! {
             ACCEPT => "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
             ACCEPT_ENCODING => "gzip, deflate, br", 
@@ -470,8 +481,15 @@ impl EhClient {
                 debug!("响应返回的 set-cookie 头: {:?}", cookie_headers);
             }
             
-            // 使用统一的响应处理函数
+            // 使用统一的响应处理函数，并添加特殊调试
             let content = Self::process_response(resp, "画廊页面").await?;
+            
+            // 特殊调试：如果是画廊页面且内容为空，尝试分析原因
+            if content.is_empty() {
+                error!("画廊页面返回空内容，请检查cookies是否过期或画廊是否存在");
+                debug!("请求URL: {}", request_url);
+                debug!("响应头: {:?}", headers);
+            }
             
             debug!("响应内容长度: {}", content.len());
             
