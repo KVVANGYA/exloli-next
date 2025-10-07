@@ -442,17 +442,23 @@ impl EhClient {
         static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"or=(?P<or>[0-9a-z-]+)").unwrap());
 
         let archive_url = "https://exhentai.org/archiver.php";
-        debug!("发送请求: {}", archive_url);
-        let resp = send!(self.client.get(url.url()))?;
+        debug!("发送请求: {}", url.url());
+        let resp = send!(self.client.get(url.url())
+            .header(reqwest::header::COOKIE, &self.cookie))?;
         let html = Html::parse_document(&resp.text().await?);
-        let onclick = html.select_attr("p.g2 a", "onclick").unwrap();
+        let onclick = html.select_attr("p.g2 a", "onclick")
+            .ok_or_else(|| anyhow::anyhow!("无法找到归档链接元素 (p.g2 a)"))?;
 
-        let or = RE.captures(&onclick).and_then(|c| c.name("or")).unwrap().as_str();
+        let or = RE.captures(&onclick)
+            .and_then(|c| c.name("or"))
+            .ok_or_else(|| anyhow::anyhow!("无法从onclick中提取or参数: {}", onclick))?
+            .as_str();
 
         debug!("发送请求: {}?gid={}&token={}&or={}", archive_url, url.id(), url.token(), or);
         send!(self
             .client
             .post(archive_url)
+            .header(reqwest::header::COOKIE, &self.cookie)
             .query(&[("gid", &*url.id().to_string()), ("token", url.token()), ("or", or)])
             .form(&[("hathdl_xres", "org")]))?;
 
@@ -604,7 +610,8 @@ impl EhClient {
 
         while let Some(next_page_url) = &next_page {
             debug!("发送请求: {}", next_page_url);
-            let resp = send!(self.client.get(next_page_url))?;
+            let resp = send!(self.client.get(next_page_url)
+                .header(reqwest::header::COOKIE, &self.cookie))?;
             let html = Html::parse_document(&resp.text().await?);
             // 每一页的 URL
             pages.extend(html.select_attrs("div#gdt a", "href"));
@@ -634,7 +641,8 @@ impl EhClient {
     #[tracing::instrument(skip(self))]
     pub async fn get_image_url(&self, page: &EhPageUrl) -> Result<(u32, String)> {
         debug!("发送请求: {}", page.url());
-        let resp = send!(self.client.get(&page.url()))?;
+        let resp = send!(self.client.get(&page.url())
+            .header(reqwest::header::COOKIE, &self.cookie))?;
         let (original_url, url, nl, fileindex) = {
             let html = Html::parse_document(&resp.text().await?);
 
@@ -645,9 +653,11 @@ impl EhClient {
                 .and_then(|ele| ele.value().attr("href"))
                 .map(|s| s.to_string());
 
-            let url = html.select_attr("img#img", "src").unwrap();
+            let url = html.select_attr("img#img", "src")
+                .ok_or_else(|| anyhow::anyhow!("无法找到图片元素 (img#img)，可能是页面权限问题或结构变化"))?;
             let nl = html.select_attr("img#img", "onerror").and_then(extract_nl);
-            let fileindex = extract_fileindex(&url).unwrap();
+            let fileindex = extract_fileindex(&url)
+                .ok_or_else(|| anyhow::anyhow!("无法从URL中提取fileindex: {}", url))?;
             (original_url, url, nl, fileindex)
         };
 
@@ -655,7 +665,9 @@ impl EhClient {
         if let Some(original_url) = original_url {
             debug!("发现原图链接: {}", original_url);
             // 获取302跳转后的真实URL
-            match self.client.get(&original_url).send().await {
+            match self.client.get(&original_url)
+                .header(reqwest::header::COOKIE, &self.cookie)
+                .send().await {
                 Ok(resp) => {
                     let final_url = resp.url().to_string();
                     debug!("原图跳转后的URL: {}", final_url);
@@ -680,14 +692,17 @@ impl EhClient {
         fileindex: u32,
     ) -> Result<(u32, String)> {
         debug!("发送 HEAD 请求: {}", url);
-        if send!(self.client.head(&url)).is_ok() {
+        if send!(self.client.head(&url)
+            .header(reqwest::header::COOKIE, &self.cookie)).is_ok() {
             Ok((fileindex, url))
         } else if let Some(nl) = &nl {
             let page_with_nl = page.with_nl(nl);
             debug!("发送请求: {}", page_with_nl.url());
-            let resp = send!(self.client.get(&page_with_nl.url()))?;
+            let resp = send!(self.client.get(&page_with_nl.url())
+                .header(reqwest::header::COOKIE, &self.cookie))?;
             let html = Html::parse_document(&resp.text().await?);
-            let url = html.select_attr("img#img", "src").unwrap();
+            let url = html.select_attr("img#img", "src")
+                .ok_or_else(|| anyhow::anyhow!("无法找到备用图片元素 (img#img)"))?;
             Ok((fileindex, url))
         } else {
             Err(EhError::HaHUrlBroken(url))

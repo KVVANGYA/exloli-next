@@ -381,9 +381,10 @@ impl ExloliUploader {
                         // 根据文件大小决定是否使用 WebP 压缩
                         let (download_url, mut filename) = if should_compress {
                             // 使用images.weserv.nl作为主要API，因为它对JPG支持无损压缩不会导致504
-                            let webp_url = format!("https://images.weserv.nl/?url={}&output=webp&ll&n=-1",
+                            // 添加尺寸限制参数防止原图分辨率过大导致即时预览不显示
+                            let webp_url = format!("https://images.weserv.nl/?url={}&output=webp&ll&n=-1&w=4096&h=4096",
                                 urlencoding::encode(&url));
-                            debug!("使用images.weserv.nl WebP无损压缩服务下载图片: {}", webp_url);
+                            debug!("使用images.weserv.nl WebP无损压缩服务下载图片（限制4096x4096）: {}", webp_url);
                             (webp_url, format!("{}.webp", page.hash()))
                         } else {
                             (url.clone(), format!("{}.{}", page.hash(), suffix))
@@ -407,10 +408,10 @@ impl ExloliUploader {
                                         warn!("压缩服务返回504超时，尝试有损压缩质量100重试: {}", download_url);
                                         
                                         let fallback_url = if download_url.contains("images.weserv.nl") {
-                                            format!("https://wsrv.nl/?url={}&output=webp&q=100&n=-1",
+                                            format!("https://wsrv.nl/?url={}&output=webp&q=100&n=-1&w=4096&h=4096",
                                                 urlencoding::encode(&url))
                                         } else {
-                                            format!("https://images.weserv.nl/?url={}&output=webp&q=100&n=-1",
+                                            format!("https://images.weserv.nl/?url={}&output=webp&q=100&n=-1&w=4096&h=4096",
                                                 urlencoding::encode(&url))
                                         };
                                         
@@ -525,19 +526,19 @@ impl ExloliUploader {
                             // 根据失败原因选择处理方式
                             let (service_url, service_name) = if request_failed {
                                 // 网络请求失败，直接使用备用API wsrv.nl
-                                let backup_url = format!("https://wsrv.nl/?url={}&output=webp&ll&n=-1",
+                                let backup_url = format!("https://wsrv.nl/?url={}&output=webp&ll&n=-1&w=4096&h=4096",
                                     urlencoding::encode(&url));
                                 debug!("网络请求失败，尝试备用 API wsrv.nl 无损: {}", backup_url);
                                 (backup_url, "wsrv.nl 无损")
                             } else if bytes.len() > 4_900_000 {
                                 // 文件过大，先尝试images.weserv.nl有损压缩
-                                let images_lossy_url = format!("https://images.weserv.nl/?url={}&output=webp&q=95&n=-1",
+                                let images_lossy_url = format!("https://images.weserv.nl/?url={}&output=webp&q=95&n=-1&w=4096&h=4096",
                                     urlencoding::encode(&url));
                                 debug!("尝试 images.weserv.nl 有损压缩: {}", images_lossy_url);
                                 (images_lossy_url, "images.weserv.nl 有损")
                             } else {
                                 // 文件太小（可能是错误），尝试备用API wsrv.nl
-                                let backup_url = format!("https://wsrv.nl/?url={}&output=webp&ll&n=-1",
+                                let backup_url = format!("https://wsrv.nl/?url={}&output=webp&ll&n=-1&w=4096&h=4096",
                                     urlencoding::encode(&url));
                                 debug!("尝试备用 API wsrv.nl 无损: {}", backup_url);
                                 (backup_url, "wsrv.nl 无损")
@@ -561,7 +562,7 @@ impl ExloliUploader {
                                         if service_name == "images.weserv.nl 有损" {
                                             warn!("images.weserv.nl 有损压缩失败，尝试备用API wsrv.nl");
                                             // images.weserv.nl 有损都失败了，备用API也用有损
-                                            let backup_url = format!("https://wsrv.nl/?url={}&output=webp&q=95&n=-1",
+                                            let backup_url = format!("https://wsrv.nl/?url={}&output=webp&q=95&n=-1&w=4096&h=4096",
                                                 urlencoding::encode(&url));
                                             debug!("尝试备用 API wsrv.nl 有损: {}", backup_url);
                                             
@@ -588,7 +589,7 @@ impl ExloliUploader {
                                         } else if service_name == "wsrv.nl 无损" {
                                             warn!("wsrv.nl 无损压缩失败，尝试 wsrv.nl 有损压缩");
                                             // wsrv.nl 无损失败，尝试有损
-                                            let backup_url = format!("https://wsrv.nl/?url={}&output=webp&q=95&n=-1",
+                                            let backup_url = format!("https://wsrv.nl/?url={}&output=webp&q=95&n=-1&w=4096&h=4096",
                                                 urlencoding::encode(&url));
                                             debug!("尝试 wsrv.nl 有损: {}", backup_url);
                                             
@@ -616,7 +617,7 @@ impl ExloliUploader {
                                         } else if service_name == "images.weserv.nl 质量100" {
                                             warn!("images.weserv.nl JPG质量100压缩失败，尝试质量95压缩");
                                             // JPG质量100失败，尝试质量95
-                                            let backup_url = format!("https://images.weserv.nl/?url={}&output=webp&q=95&n=-1",
+                                            let backup_url = format!("https://images.weserv.nl/?url={}&output=webp&q=95&n=-1&w=4096&h=4096",
                                                 urlencoding::encode(&url));
                                             debug!("尝试 images.weserv.nl JPG质量95: {}", backup_url);
                                             
