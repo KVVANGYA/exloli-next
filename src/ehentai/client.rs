@@ -100,6 +100,10 @@ impl EhClient {
                     Ok(content) => {
                         if content.len() < 1000 {
                             warn!("首页响应内容过短: {} 字符，可能是cookie失效", content.len());
+                            debug!("首页响应内容: {:?}", content);
+                            if content.contains("location.replace") || content.contains("bounce_login") {
+                                return Err(anyhow::anyhow!("基础Cookie无效，首页收到重定向响应").into());
+                            }
                         } else {
                             debug!("首页访问成功，响应内容长度: {} 字符", content.len());
                         }
@@ -134,7 +138,12 @@ impl EhClient {
                 // 检查响应内容
                 match response.text().await {
                     Ok(content) => {
-                        if content.contains("bounce_login") || content.contains("login") {
+                        if content.len() < 100 {
+                            warn!("uconfig.php 响应内容过短: {} 字符，内容: {:?}", content.len(), content);
+                            if content.contains("location.replace") || content.contains("bounce_login") {
+                                warn!("uconfig.php 重定向到登录页面，这可能影响cookie完整性");
+                            }
+                        } else if content.contains("bounce_login") || content.contains("login") {
                             warn!("uconfig.php 重定向到登录页面，cookie可能需要刷新");
                         } else {
                             debug!("uconfig.php 访问成功，响应长度: {} 字符", content.len());
@@ -170,7 +179,12 @@ impl EhClient {
                 // 检查响应内容
                 match response.text().await {
                     Ok(content) => {
-                        if content.contains("bounce_login") || content.contains("login") {
+                        if content.len() < 100 {
+                            warn!("mytags 响应内容过短: {} 字符，内容: {:?}", content.len(), content);
+                            if content.contains("location.replace") || content.contains("bounce_login") {
+                                warn!("mytags 重定向到登录页面，这可能影响cookie完整性");
+                            }
+                        } else if content.contains("bounce_login") || content.contains("login") {
                             warn!("mytags 重定向到登录页面，cookie可能需要刷新");
                         } else {
                             debug!("mytags 访问成功，响应长度: {} 字符", content.len());
@@ -206,7 +220,16 @@ impl EhClient {
                 match response.text().await {
                     Ok(content) => {
                         if content.len() < 1000 {
-                            return Err(anyhow::anyhow!("Cookie补全失败，最终验证响应内容过短: {} 字符", content.len()).into());
+                            debug!("最终验证响应内容: {:?}", content);
+                            // 检查是否是JavaScript重定向
+                            if content.contains("location.replace") || content.contains("window.location") {
+                                return Err(anyhow::anyhow!("Cookie补全失败，收到重定向响应: {}", content).into());
+                            }
+                            // 检查是否是登录重定向
+                            if content.contains("bounce_login") {
+                                return Err(anyhow::anyhow!("Cookie补全失败，被重定向到登录页面").into());
+                            }
+                            return Err(anyhow::anyhow!("Cookie补全失败，最终验证响应内容过短: {} 字符，内容: {:?}", content.len(), content).into());
                         } else {
                             info!("Cookie补全成功，最终验证通过，响应长度: {} 字符", content.len());
                         }
