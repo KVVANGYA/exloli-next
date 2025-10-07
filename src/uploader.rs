@@ -400,7 +400,8 @@ impl ExloliUploader {
                                 
                                 // 检查响应状态码
                                 if !status.is_success() {
-                                    if download_url.contains("hath.network") {
+                                    // 正确判断：只有当请求的是真正的H@H域名时才认为是H@H节点错误
+                                    if download_url.starts_with("https://") && download_url.contains(".hath.network") && !download_url.contains("weserv.nl") && !download_url.contains("wsrv.nl") {
                                         error!("H@H 节点返回错误状态 {}: 所属的H@H节点异常，请稍后重试 (URL: {})", status, download_url);
                                         return Err(anyhow!("所属的H@H节点异常，请稍后重试 (状态码: {}, URL: {})", status, download_url));
                                     } else if status.as_u16() == 504 && should_compress {
@@ -441,8 +442,10 @@ impl ExloliUploader {
                                             }
                                         }
                                     } else {
-                                        error!("请求失败，状态码: {} (URL: {})", status, download_url);
-                                        return Err(anyhow!("请求失败，状态码: {} (URL: {})", status, download_url));
+                                        // 对于转码服务的失败，标记为网络请求失败，继续后续处理
+                                        warn!("转码服务请求失败，状态码: {} (URL: {})", status, download_url);
+                                        request_failed = true;
+                                        vec![].into() // 空数据，让后续逻辑处理
                                     }
                                 } else {
                                     match response.bytes().await {
@@ -450,7 +453,8 @@ impl ExloliUploader {
                                             debug!("图片 {} 下载完成: {} bytes", page.page(), bytes.len());
                                             
                                             // 检查是否是 H@H 错误响应（通常很小且包含错误信息）
-                                            if download_url.contains("hath.network") && bytes.len() < 100 {
+                                            // 只有直接请求H@H节点时才检查错误响应
+                                            if download_url.starts_with("https://") && download_url.contains(".hath.network") && !download_url.contains("weserv.nl") && !download_url.contains("wsrv.nl") && bytes.len() < 100 {
                                                 let content = String::from_utf8_lossy(&bytes);
                                                 warn!("H@H 节点可能返回错误响应: {} bytes, 内容: {:?}", bytes.len(), content);
                                                 if content.contains("error") || content.contains("Error") || bytes.len() < 50 {
