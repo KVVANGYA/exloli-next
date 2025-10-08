@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
 use chrono::{Datelike, Utc};
-use futures::StreamExt;
+use futures::{StreamExt, FutureExt};
 use regex::Regex;
 use reqwest::{Client, StatusCode};
 use scraper::{Html, Selector};
@@ -39,15 +39,57 @@ where
             Err(err) => {
                 attempts += 1;
                 if attempts >= max_retries {
+                    error!("重试 {} 次后仍失败，放弃操作: {}", max_retries, err);
                     return Err(err);
                 }
                 
-                let delay = Duration::from_millis(500 * (1 << attempts)); // 指数退避: 1s, 2s, 4s...
-                warn!("操作失败 (尝试 {}/{}): {}, {}ms 后重试", attempts, max_retries, err, delay.as_millis());
+                // 根据重试次数调整延迟：第1次1s，第2次2s，第3次4s，第4次8s，第5次16s
+                let delay = Duration::from_millis(1000 * (1 << (attempts - 1))); 
+                warn!("操作失败 (尝试 {}/{}): {}, {}秒后重试", attempts, max_retries, err, delay.as_secs());
                 time::sleep(delay).await;
             }
         }
     }
+}
+
+/// 改进的重试机制，针对网络错误提供更多重试次数
+async fn retry_network_operation<T, E, F, Fut>(operation_name: &str, mut func: F) -> Result<T, E>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, E>>,
+    E: std::fmt::Display,
+{
+    const MAX_RETRIES: usize = 7; // 网络操作给更多重试机会
+    
+    for attempt in 1..=MAX_RETRIES {
+        match func().await {
+            Ok(result) => {
+                if attempt > 1 {
+                    info!("{} 在第 {} 次尝试后成功", operation_name, attempt);
+                }
+                return Ok(result);
+            }
+            Err(err) => {
+                if attempt >= MAX_RETRIES {
+                    error!("{} 重试 {} 次后仍失败: {}", operation_name, MAX_RETRIES, err);
+                    return Err(err);
+                }
+                
+                // 更保守的退避策略：前几次快速重试，后面延迟增加
+                let delay = if attempt <= 3 {
+                    Duration::from_secs(attempt as u64) // 1s, 2s, 3s
+                } else {
+                    Duration::from_secs(5 + ((attempt - 3) * 5) as u64) // 10s, 15s, 20s, 25s
+                };
+                
+                warn!("{} 失败 (尝试 {}/{}): {}, {}秒后重试", 
+                      operation_name, attempt, MAX_RETRIES, err, delay.as_secs());
+                time::sleep(delay).await;
+            }
+        }
+    }
+    
+    unreachable!()
 }
 
 #[derive(Debug, Clone)]
@@ -96,22 +138,46 @@ impl ExloliUploader {
     /// 根据配置文件，扫描前 N 个本子，并进行上传或者更新
     #[tracing::instrument(skip(self))]
     async fn check(&self) {
-        let stream = self
-            .ehentai
-            .search_iter(&self.config.exhentai.search_params)
-            .take(self.config.exhentai.search_count);
-        tokio::pin!(stream);
-        while let Some(next) = stream.next().await {
-            // 错误不要上抛，避免影响后续画廊
-            if let Err(err) = self.try_update(&next, true).await {
-                error!("check_and_update: {:?}\n{}", err, Backtrace::force_capture());
+        // 添加整体错误捕获，确保扫描循环不会因为任何错误而中断
+        let result = std::panic::AssertUnwindSafe(async {
+            let stream = self
+                .ehentai
+                .search_iter(&self.config.exhentai.search_params)
+                .take(self.config.exhentai.search_count);
+            tokio::pin!(stream);
+            
+            let mut processed_count = 0;
+            let mut error_count = 0;
+            
+            while let Some(next) = stream.next().await {
+                processed_count += 1;
+                info!("处理画廊 {}/{}: {}", processed_count, self.config.exhentai.search_count, next.url());
+                
+                // 错误不要上抛，避免影响后续画廊
+                if let Err(err) = self.try_update(&next, true).await {
+                    error_count += 1;
+                    error!("check_and_update: {:?}\n{}", err, Backtrace::force_capture());
+                }
+                if let Err(err) = self.try_upload(&next, true).await {
+                    error_count += 1;
+                    error!("check_and_upload: {:?}\n{}", err, Backtrace::force_capture());
+                    // 通知管理员上传失败 (但不让通知失败影响主流程)
+                    if let Err(notify_err) = std::panic::AssertUnwindSafe(
+                        self.notify_admins(&format!("画廊上传失败\n\nURL: {}\n错误: {}", next.url(), err))
+                    ).catch_unwind().await {
+                        error!("通知管理员失败: {:?}", notify_err);
+                    }
+                }
+                time::sleep(Duration::from_secs(1)).await;
             }
-            if let Err(err) = self.try_upload(&next, true).await {
-                error!("check_and_upload: {:?}\n{}", err, Backtrace::force_capture());
-                // 通知管理员上传失败
-                self.notify_admins(&format!("画廊上传失败\n\nURL: {}\n错误: {}", next.url(), err)).await;
-            }
-            time::sleep(Duration::from_secs(1)).await;
+            
+            info!("扫描完成：处理了 {} 个画廊，遇到 {} 个错误", processed_count, error_count);
+            Result::<()>::Ok(())
+        });
+        
+        if let Err(panic_err) = std::panic::AssertUnwindSafe(result).catch_unwind().await {
+            error!("扫描过程中发生严重错误（panic）: {:?}", panic_err);
+            // 即使发生panic，也要让程序继续运行
         }
     }
 
@@ -413,11 +479,14 @@ impl ExloliUploader {
                             (original_url.clone(), format!("{}.{}", page.hash(), suffix), false)
                         };
 
-                        // 下载图片（带重试机制）
-                        let bytes = retry_with_backoff(3, || async {
-                            let response = client.get(&download_url).send().await?;
-                            response.bytes().await
-                        }).await.map_err(|e| {
+                        // 下载图片（带网络重试机制）
+                        let bytes = retry_network_operation(
+                            &format!("下载图片 {}", page.page()),
+                            || async {
+                                let response = client.get(&download_url).send().await?;
+                                response.bytes().await
+                            }
+                        ).await.map_err(|e| {
                             error!("下载图片失败 {}: {}", page.page(), e);
                             e
                         }).ok();
@@ -426,10 +495,13 @@ impl ExloliUploader {
                         let (final_bytes, final_filename, used_preview) = if bytes.is_none() && use_compressed && preview_url.is_some() {
                             let preview = preview_url.unwrap();
                             debug!("压缩图片失败，尝试使用预览图: {}", preview);
-                            match retry_with_backoff(3, || async {
-                                let response = client.get(&preview).send().await?;
-                                response.bytes().await
-                            }).await {
+                            match retry_network_operation(
+                                &format!("下载预览图 {}", page.page()),
+                                || async {
+                                    let response = client.get(&preview).send().await?;
+                                    response.bytes().await
+                                }
+                            ).await {
                                 Ok(preview_bytes) => {
                                     let preview_suffix = preview.split('.').last().unwrap_or("jpg");
                                     (Some(preview_bytes), format!("{}_preview.{}", page.hash(), preview_suffix), true)
@@ -458,12 +530,17 @@ impl ExloliUploader {
                             callback(prog.clone()).await;
                         }
 
-                        // 上传到 S3
-                        let upload_url = match s3_clone.upload(&final_filename, &mut bytes.as_ref()).await {
+                        // 上传到 S3（带网络重试机制）
+                        let upload_url = match retry_network_operation(
+                            &format!("上传图片 {}", page.page()), 
+                            || async {
+                                s3_clone.upload(&final_filename, &mut bytes.as_ref()).await
+                            }
+                        ).await {
                             Ok(url) => url,
                             Err(e) => {
-                                error!("上传图片失败 {}: {}", page.page(), e);
-                                return Err(anyhow!("上传图片失败 {}: {}", page.page(), e));
+                                error!("上传图片失败 {} (多次重试后仍失败): {}", page.page(), e);
+                                return Err(anyhow!("上传图片失败 {} (多次重试后仍失败): {}", page.page(), e));
                             }
                         };
                         debug!("已上传: {} {}", page.page(), if used_preview { "（预览图）" } else { "" });

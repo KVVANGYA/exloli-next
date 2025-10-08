@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use futures::FutureExt;
 use teloxide::prelude::*;
 use teloxide::types::{InputFile, ParseMode};
 use tokio::fs;
@@ -38,18 +39,54 @@ impl BackupService {
         let interval = Duration::from_secs(self.config.interval_hours * 3600);
         
         loop {
-            if let Err(e) = self.perform_backup().await {
-                error!("备份失败: {}", e);
-                self.send_error_notification(&format!("备份失败: {}", e)).await;
+            // 添加 panic 捕获，确保备份失败不会导致程序崩溃
+            let backup_result = std::panic::AssertUnwindSafe(async {
+                self.perform_backup().await
+            }).catch_unwind().await;
+            
+            match backup_result {
+                Ok(Ok(())) => {
+                    info!("备份成功完成");
+                }
+                Ok(Err(e)) => {
+                    error!("备份失败: {}", e);
+                    // 发送错误通知，但不让通知失败影响备份循环
+                    if let Err(notify_err) = std::panic::AssertUnwindSafe(
+                        self.send_error_notification(&format!("备份失败: {}", e))
+                    ).catch_unwind().await {
+                        error!("发送备份失败通知时出错: {:?}", notify_err);
+                    }
+                }
+                Err(panic_err) => {
+                    error!("备份过程中发生严重错误（panic）: {:?}", panic_err);
+                    if let Err(notify_err) = std::panic::AssertUnwindSafe(
+                        self.send_error_notification("备份过程中发生严重错误（panic）")
+                    ).catch_unwind().await {
+                        error!("发送panic通知时出错: {:?}", notify_err);
+                    }
+                }
             }
             
             // 清理过期备份文件（如果启用）
             if self.config.enable_retention {
-                if let Err(e) = self.cleanup_old_backups().await {
-                    error!("清理过期备份失败: {}", e);
+                let cleanup_result = std::panic::AssertUnwindSafe(async {
+                    self.cleanup_old_backups().await
+                }).catch_unwind().await;
+                
+                match cleanup_result {
+                    Ok(Ok(())) => {
+                        info!("过期备份清理完成");
+                    }
+                    Ok(Err(e)) => {
+                        error!("清理过期备份失败: {}", e);
+                    }
+                    Err(panic_err) => {
+                        error!("清理过期备份时发生严重错误（panic）: {:?}", panic_err);
+                    }
                 }
             }
             
+            info!("备份任务完成，等待 {} 小时后执行下次备份", self.config.interval_hours);
             sleep(interval).await;
         }
     }
@@ -443,23 +480,21 @@ impl BackupService {
 }
 
 /// 启动备份服务的辅助函数  
-pub async fn start_backup_service(config: &crate::config::Config, bot: Bot) -> anyhow::Result<()> {
-    if !config.backup.enabled {
-        return Ok(());
+pub async fn start_backup_service(backup_config: &crate::config::Backup, bot: Bot) -> anyhow::Result<()> {
+    if !backup_config.enabled {
+        info!("备份服务已禁用，跳过启动");
+        // 如果备份被禁用，永远等待以保持任务活跃
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+        }
     }
 
     let backup_service = BackupService::new(
-        config.backup.clone(),
+        backup_config.clone(),
         bot,
-        config.database_url.clone(),
+        "db.sqlite".to_string(), // 使用默认数据库路径
     );
 
-    // 在后台启动备份服务
-    tokio::spawn(async move {
-        if let Err(e) = backup_service.start().await {
-            error!("备份服务错误: {}", e);
-        }
-    });
-
-    Ok(())
+    // 直接运行备份服务，不再spawn新任务
+    backup_service.start().await
 }
