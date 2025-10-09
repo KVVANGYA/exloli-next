@@ -46,6 +46,7 @@ pub fn admin_command_handler() -> Handler<'static, DependencyMap, Result<()>, Dp
     teloxide::filter_command::<AdminCommand, _>()
         .chain(filter_admin_msg())
         .branch(case![AdminCommand::Upload(urls)].endpoint(cmd_upload))
+        .branch(case![AdminCommand::ForceUpload(urls)].endpoint(cmd_force_upload))
         .branch(case![AdminCommand::Delete].endpoint(cmd_delete))
         .branch(case![AdminCommand::Erase].endpoint(cmd_delete))
         .branch(case![AdminCommand::ReCheck].endpoint(cmd_recheck))
@@ -72,7 +73,16 @@ async fn cmd_upload(
     uploader: ExloliUploader,
     urls: String,
 ) -> Result<()> {
-    cmd_upload_wrapper(bot, msg, uploader, urls).await
+    cmd_upload_wrapper(bot, msg, uploader, urls, false).await
+}
+
+async fn cmd_force_upload(
+    bot: Bot,
+    msg: Message,
+    uploader: ExloliUploader,
+    urls: String,
+) -> Result<()> {
+    cmd_upload_wrapper(bot, msg, uploader, urls, true).await
 }
 
 // Add a catch-all wrapper to handle any panics
@@ -81,8 +91,9 @@ async fn cmd_upload_wrapper(
     msg: Message,
     uploader: ExloliUploader,
     urls: String,
+    force: bool,
 ) -> Result<()> {
-    match cmd_upload_inner(bot.clone(), msg.clone(), uploader, urls).await {
+    match cmd_upload_inner(bot.clone(), msg.clone(), uploader, urls, force).await {
         Ok(_) => {
             info!("Upload command completed successfully");
             Ok(())
@@ -100,9 +111,10 @@ async fn cmd_upload_inner(
     msg: Message,
     uploader: ExloliUploader,
     urls: String,
+    force: bool,
 ) -> Result<()> {
     let user_id = msg.from().unwrap().id;
-    info!("{}: /upload {}", user_id, urls);
+    info!("{}: /{} {}", user_id, if force { "forceupload" } else { "upload" }, urls);
     
     if urls.trim().is_empty() {
         reply_to!(bot, msg, "请提供至少一个画廊链接").await?;
@@ -189,7 +201,7 @@ async fn cmd_upload_inner(
             }
         });
         
-        match upload_with_progress_new(&uploader, gallery, false, progress_clone, callback).await {
+        match upload_with_progress_new(&uploader, gallery, !force, progress_clone, callback).await {
             Ok(_) => {
                 info!("Upload successful for gallery {}", gallery.id());
                 results.push((gallery.id(), true, "上传成功".to_string()));

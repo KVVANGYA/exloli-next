@@ -8,6 +8,8 @@ use crate::ehentai::EhGalleryUrl;
 pub enum AdminCommand {
     #[command(description = "根据 E 站 URL 上传指定画廊，如果已存在，则重新上传")]
     Upload(String),
+    #[command(description = "强制重新获取画廊，无视数据库中的现有记录，替换旧数据")]
+    ForceUpload(String),
     #[command(description = "删除所回复的画廊")]
     Delete,
     #[command(description = "完全删除所回复的画廊，会导致重新上传")]
