@@ -304,23 +304,25 @@ where
         
         let gallery_id = gallery_url.id();
         
-        // 只删除页面关联记录（这是最重要的，影响图片去重逻辑）
+        // 按照创建的逆序删除记录，以避免外键约束问题
         // 不删除画廊记录，以保留评分等重要数据
-        if let Err(e) = PageEntity::delete_by_gallery(gallery_id).await {
-            warn!("删除页面记录失败: {}", e);
-        }
         
-        // 删除消息记录，这样会重新发布新消息
-        if let Err(e) = MessageEntity::delete_by_gallery(gallery_id).await {
-            warn!("删除消息记录失败: {}", e);
-        }
-        
-        // 删除Telegraph记录，确保重新创建文章
+        // 1. 删除Telegraph记录，确保重新创建文章
         if let Err(e) = TelegraphEntity::delete_by_gallery(gallery_id).await {
             warn!("删除Telegraph记录失败: {}", e);
         }
         
-        // 删除图片记录，确保使用全新的图片链接而不是旧的ipfs链接
+        // 2. 删除消息记录，这样会重新发布新消息
+        if let Err(e) = MessageEntity::delete_by_gallery(gallery_id).await {
+            warn!("删除消息记录失败: {}", e);
+        }
+        
+        // 3. 删除页面关联记录（这是最重要的，影响图片去重逻辑）
+        if let Err(e) = PageEntity::delete_by_gallery(gallery_id).await {
+            warn!("删除页面记录失败: {}", e);
+        }
+        
+        // 4. 最后删除图片记录，确保使用全新的图片链接而不是旧的ipfs链接
         if let Err(e) = ImageEntity::delete_by_gallery(gallery_id).await {
             warn!("删除图片记录失败: {}", e);
         }
