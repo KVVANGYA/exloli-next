@@ -300,7 +300,7 @@ where
         drop(prog);
 
         // 删除相关的数据库记录以确保强制重新上传（保留画廊记录和评分数据）
-        use crate::database::{MessageEntity, PageEntity, TelegraphEntity};
+        use crate::database::{ImageEntity, MessageEntity, PageEntity, TelegraphEntity};
         
         let gallery_id = gallery_url.id();
         
@@ -320,7 +320,12 @@ where
             warn!("删除Telegraph记录失败: {}", e);
         }
         
-        info!("已清理画廊 {} 的页面、消息和Telegraph记录（保留画廊和评分数据），准备强制重新上传", gallery_id);
+        // 删除图片记录，确保使用全新的图片链接而不是旧的ipfs链接
+        if let Err(e) = ImageEntity::delete_by_gallery(gallery_id).await {
+            warn!("删除图片记录失败: {}", e);
+        }
+        
+        info!("已清理画廊 {} 的页面、消息、Telegraph和图片记录（保留画廊和评分数据），准备强制重新上传", gallery_id);
     }
 
     // 更新进度：开始获取画廊信息
