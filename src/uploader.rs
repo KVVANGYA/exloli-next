@@ -532,8 +532,7 @@ impl ExloliUploader {
                                     }
                                     // 检查是否为images.weserv.nl的JSON错误响应
                                     if (content_lower.starts_with("{") && content_lower.contains("\"status\"") && content_lower.contains("\"error\"")) ||
-                                       content_lower.contains("\"code\":404") ||
-                                       content_lower.contains("\"message\":") {
+                                       (content_lower.starts_with("{") && content_lower.contains("\"code\"") && content_lower.contains("\"message\"")) {
                                         return Err(anyhow!("images.weserv.nl返回错误响应: {}", content_start));
                                     }
                                 }
@@ -577,8 +576,7 @@ impl ExloliUploader {
                                         }
                                         // 检查是否为JSON错误响应
                                         if (content_lower.starts_with("{") && content_lower.contains("\"status\"") && content_lower.contains("\"error\"")) ||
-                                           content_lower.contains("\"code\":404") ||
-                                           content_lower.contains("\"message\":") {
+                                           (content_lower.starts_with("{") && content_lower.contains("\"code\"") && content_lower.contains("\"message\"")) {
                                             return Err(anyhow!("预览图服务返回错误响应: {}", content_start));
                                         }
                                     }
@@ -631,8 +629,7 @@ impl ExloliUploader {
                                         }
                                         // 检查是否为JSON错误响应
                                         if (content_lower.starts_with("{") && content_lower.contains("\"status\"") && content_lower.contains("\"error\"")) ||
-                                           content_lower.contains("\"code\":404") ||
-                                           content_lower.contains("\"message\":") {
+                                           (content_lower.starts_with("{") && content_lower.contains("\"code\"") && content_lower.contains("\"message\"")) {
                                             return Err(anyhow!("预览图服务返回错误响应: {}", content_start));
                                         }
                                     }
