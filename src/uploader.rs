@@ -234,7 +234,7 @@ impl ExloliUploader {
 
         let gallery = self.ehentai.get_gallery(gallery).await?;
         // 上传图片、发布文章
-        self.upload_gallery_image_with_progress(&gallery, progress_callback).await?;
+        self.upload_gallery_image_with_progress(&gallery, check, progress_callback).await?;
         let article = self.publish_telegraph_article(&gallery).await?;
         // 发送消息
         let text = self.create_message_text(&gallery, &article.url).await?;
@@ -328,13 +328,14 @@ impl ExloliUploader {
 impl ExloliUploader {
     /// 获取某个画廊里的所有图片，并且上传到 telegrpah，如果已经上传过的，会跳过上传
     async fn upload_gallery_image(&self, gallery: &EhGallery) -> Result<()> {
-        self.upload_gallery_image_with_progress(gallery, None::<fn(UploadProgress) -> std::future::Ready<()>>).await
+        self.upload_gallery_image_with_progress(gallery, true, None::<fn(UploadProgress) -> std::future::Ready<()>>).await
     }
 
     /// 带进度回调的图片上传方法
     async fn upload_gallery_image_with_progress<F, Fut>(
         &self,
         gallery: &EhGallery,
+        check: bool,
         progress_callback: Option<F>,
     ) -> Result<()>
     where
@@ -346,13 +347,19 @@ impl ExloliUploader {
         let mut pages = vec![];
         let mut already_uploaded = 0;
         for page in &gallery.pages {
-            match ImageEntity::get_by_hash(page.hash()).await? {
-                Some(img) => {
-                    // NOTE: 此处存在重复插入的可能，但是由于 PageEntity::create 使用 OR IGNORE，所以不影响
-                    PageEntity::create(page.gallery_id(), page.page(), img.id).await?;
-                    already_uploaded += 1;
+            if check {
+                // 只有在check=true时才进行hash检查来去重
+                match ImageEntity::get_by_hash(page.hash()).await? {
+                    Some(img) => {
+                        // NOTE: 此处存在重复插入的可能，但是由于 PageEntity::create 使用 OR IGNORE，所以不影响
+                        PageEntity::create(page.gallery_id(), page.page(), img.id).await?;
+                        already_uploaded += 1;
+                    }
+                    None => pages.push(page.clone()),
                 }
-                None => pages.push(page.clone()),
+            } else {
+                // check=false时，强制重新下载所有图片，跳过hash检查
+                pages.push(page.clone());
             }
         }
         info!("需要下载&上传 {} 张图片，已存在 {} 张", pages.len(), already_uploaded);
