@@ -300,7 +300,7 @@ where
         drop(prog);
 
         // 删除相关的数据库记录以确保强制重新上传（保留画廊记录和评分数据）
-        use crate::database::{MessageEntity, PageEntity};
+        use crate::database::{MessageEntity, PageEntity, TelegraphEntity};
         
         let gallery_id = gallery_url.id();
         
@@ -315,7 +315,12 @@ where
             warn!("删除消息记录失败: {}", e);
         }
         
-        info!("已清理画廊 {} 的页面和消息记录（保留画廊和评分数据），准备强制重新上传", gallery_id);
+        // 删除Telegraph记录，确保重新创建文章
+        if let Err(e) = TelegraphEntity::delete_by_gallery(gallery_id).await {
+            warn!("删除Telegraph记录失败: {}", e);
+        }
+        
+        info!("已清理画廊 {} 的页面、消息和Telegraph记录（保留画廊和评分数据），准备强制重新上传", gallery_id);
     }
 
     // 更新进度：开始获取画廊信息

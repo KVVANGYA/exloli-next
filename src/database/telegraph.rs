@@ -37,4 +37,12 @@ impl TelegraphEntity {
             .execute(&*DB)
             .await
     }
+
+    /// 删除指定画廊的Telegraph记录
+    pub async fn delete_by_gallery(gallery_id: i32) -> Result<SqliteQueryResult> {
+        sqlx::query("DELETE FROM telegraph WHERE gallery_id = ?")
+            .bind(gallery_id)
+            .execute(&*DB)
+            .await
+    }
 }
