@@ -95,4 +95,13 @@ impl PageEntity {
             .fetch_one(&*DB)
             .await
     }
+
+    /// 删除指定画廊的所有页面记录
+    #[tracing::instrument(level = Level::DEBUG)]
+    pub async fn delete_by_gallery(gallery_id: i32) -> Result<SqliteQueryResult> {
+        sqlx::query("DELETE FROM page WHERE gallery_id = ?")
+            .bind(gallery_id)
+            .execute(&*DB)
+            .await
+    }
 }

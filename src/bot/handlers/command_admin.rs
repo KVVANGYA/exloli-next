@@ -3,7 +3,7 @@ use teloxide::dispatching::DpHandlerDescription;
 use teloxide::dptree::case;
 use teloxide::prelude::*;
 use teloxide::types::MessageId;
-use tracing::info;
+use tracing::{info, warn};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -289,6 +289,33 @@ where
         prog.status_message = "已存在，跳过".to_string();
         callback(prog.clone()).await;
         return Ok(());
+    }
+
+    // 如果是强制重新上传模式，先清理数据库中的相关记录
+    if !check {
+        let mut prog = progress.lock().await;
+        prog.current_stage = UploadStage::Scanning;
+        prog.status_message = "清理数据库记录...".to_string();
+        callback(prog.clone()).await;
+        drop(prog);
+
+        // 删除相关的数据库记录以确保强制重新上传（保留画廊记录和评分数据）
+        use crate::database::{MessageEntity, PageEntity};
+        
+        let gallery_id = gallery_url.id();
+        
+        // 只删除页面关联记录（这是最重要的，影响图片去重逻辑）
+        // 不删除画廊记录，以保留评分等重要数据
+        if let Err(e) = PageEntity::delete_by_gallery(gallery_id).await {
+            warn!("删除页面记录失败: {}", e);
+        }
+        
+        // 删除消息记录，这样会重新发布新消息
+        if let Err(e) = MessageEntity::delete_by_gallery(gallery_id).await {
+            warn!("删除消息记录失败: {}", e);
+        }
+        
+        info!("已清理画廊 {} 的页面和消息记录（保留画廊和评分数据），准备强制重新上传", gallery_id);
     }
 
     // 更新进度：开始获取画廊信息

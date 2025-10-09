@@ -84,4 +84,15 @@ impl MessageEntity {
         .fetch_optional(&*DB)
         .await
     }
+
+    /// 根据画廊ID删除消息记录
+    #[tracing::instrument(level = Level::DEBUG)]
+    pub async fn delete_by_gallery(gallery_id: i32) -> Result<SqliteQueryResult> {
+        let channel_id = CHANNEL_ID.get().unwrap();
+        sqlx::query("DELETE FROM message WHERE gallery_id = ? AND channel_id = ?")
+            .bind(gallery_id)
+            .bind(channel_id)
+            .execute(&*DB)
+            .await
+    }
 }
