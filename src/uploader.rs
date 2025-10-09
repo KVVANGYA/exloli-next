@@ -127,10 +127,34 @@ impl ExloliUploader {
 
     /// 每隔 interval 分钟检查一次
     pub async fn start(&self) {
+        info!("定时扫描任务已启动，扫描间隔: {:?}", self.config.interval);
+        info!("搜索参数: {:?}", self.config.exhentai.search_params);
+        info!("搜索数量: {}", self.config.exhentai.search_count);
+        
         loop {
-            info!("开始扫描 E 站 本子");
-            self.check().await;
-            info!("扫描完毕，等待 {:?} 后继续", self.config.interval);
+            let scan_start_time = std::time::Instant::now();
+            info!("🔄 开始扫描 E 站本子 ({})", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
+            
+            // 添加 panic 捕获确保单次扫描失败不会终止循环
+            let scan_result = std::panic::AssertUnwindSafe(async {
+                self.check().await
+            }).catch_unwind().await;
+            
+            match scan_result {
+                Ok(()) => {
+                    let scan_duration = scan_start_time.elapsed();
+                    info!("✅ 扫描完毕，耗时 {:?}，等待 {:?} 后继续下次扫描", scan_duration, self.config.interval);
+                }
+                Err(panic_err) => {
+                    let scan_duration = scan_start_time.elapsed();
+                    error!("❌ 扫描过程中发生严重错误（panic），耗时 {:?}: {:?}", scan_duration, panic_err);
+                    error!("将在 {:?} 后重试下次扫描", self.config.interval);
+                }
+            }
+            
+            info!("⏰ 下次扫描将在 {} 开始", 
+                  (chrono::Utc::now() + chrono::Duration::from_std(self.config.interval).unwrap())
+                  .format("%Y-%m-%d %H:%M:%S UTC"));
             time::sleep(self.config.interval).await;
         }
     }
@@ -491,10 +515,34 @@ impl ExloliUploader {
                             e
                         }).ok();
 
-                        // 如果压缩图片下载失败且有预览图，则尝试使用预览图
-                        let (final_bytes, final_filename, used_preview) = if bytes.is_none() && use_compressed && preview_url.is_some() {
+                        // 如果压缩图片下载失败，尝试使用预览图
+                        let (final_bytes, final_filename, used_preview) = if bytes.is_none() && preview_url.is_some() {
                             let preview = preview_url.unwrap();
-                            debug!("压缩图片失败，尝试使用预览图: {}", preview);
+                            info!("原图下载失败，使用预览图作为备用方案: {}", preview);
+                            match retry_network_operation(
+                                &format!("下载预览图 {}", page.page()),
+                                || async {
+                                    let response = client.get(&preview).send().await?;
+                                    response.bytes().await
+                                }
+                            ).await {
+                                Ok(preview_bytes) => {
+                                    let preview_suffix = preview.split('.').last().unwrap_or("jpg");
+                                    (Some(preview_bytes), format!("{}_preview.{}", page.hash(), preview_suffix), true)
+                                },
+                                Err(e) => {
+                                    error!("下载预览图也失败 {}: {}", page.page(), e);
+                                    // 即使预览图失败，也不要让整个画廊失败，而是跳过这张图片
+                                    warn!("跳过图片 {} (原图和预览图都下载失败)", page.page());
+                                    continue;
+                                }
+                            }
+                        } else if let Some(b) = bytes {
+                            (Some(b), filename, false)
+                        } else if preview_url.is_some() {
+                            // 如果原图失败但有预览图，尝试预览图
+                            let preview = preview_url.unwrap();
+                            info!("原图下载失败，尝试预览图: {}", preview);
                             match retry_network_operation(
                                 &format!("下载预览图 {}", page.page()),
                                 || async {
@@ -508,13 +556,14 @@ impl ExloliUploader {
                                 },
                                 Err(e) => {
                                     error!("下载预览图失败 {}: {}", page.page(), e);
-                                    return Err(anyhow!("下载预览图失败 {}: {}", page.page(), e));
+                                    warn!("跳过图片 {} (原图和预览图都下载失败)", page.page());
+                                    continue;
                                 }
                             }
-                        } else if let Some(b) = bytes {
-                            (Some(b), filename, false)
                         } else {
-                            return Err(anyhow!("下载图片失败 {}: 无法获取任何可用图片", page.page()));
+                            error!("图片 {} 没有任何可用的下载源", page.page());
+                            warn!("跳过图片 {} (无可用下载源)", page.page());
+                            continue;
                         };
 
                         let bytes = final_bytes.unwrap();

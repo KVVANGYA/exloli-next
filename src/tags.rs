@@ -39,9 +39,25 @@ struct TagInfo {
 
 impl EhTagTransDB {
     pub fn new(file: &str) -> Self {
-        let text = fs::read_to_string(file).expect("无法打开 db.text.json");
-        let db = serde_json::from_str(&text).expect("无法解析翻译数据库");
-        Self { file: file.to_string(), db: Arc::new(RwLock::new(Some(db))) }
+        let db = match fs::read_to_string(file) {
+            Ok(text) => {
+                match serde_json::from_str(&text) {
+                    Ok(db) => {
+                        info!("成功加载标签翻译数据库: {}", file);
+                        Some(db)
+                    }
+                    Err(e) => {
+                        error!("无法解析标签翻译数据库 {}: {}, 将在后台自动下载", file, e);
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                error!("无法读取标签翻译数据库文件 {}: {}, 将在后台自动下载", file, e);
+                None
+            }
+        };
+        Self { file: file.to_string(), db: Arc::new(RwLock::new(db)) }
     }
 
     pub async fn start(&self) {
@@ -92,7 +108,14 @@ impl EhTagTransDB {
         // NOTE: 对于形如 nekogen | miyauchi takeshi 的 tag，只需要取第一部分翻译
         let name = name.split(" | ").next().unwrap();
         let lock = self.db.read().unwrap();
-        for ns in &lock.as_ref().unwrap().data {
+        
+        // 如果数据库未加载，直接返回原始名称
+        let db = match lock.as_ref() {
+            Some(db) => db,
+            None => return name.to_owned(),
+        };
+        
+        for ns in &db.data {
             if ns.namespace == namespace {
                 return ns.data.get(name).map(|info| info.name.as_str()).unwrap_or(name).to_owned();
             }
@@ -109,7 +132,12 @@ impl EhTagTransDB {
 
     /// 翻译 namespace
     pub fn trans_namespace(&self, namespace: &str) -> String {
-        self.trans("rows", namespace).swap_remove(0)
+        let translated = self.trans("rows", namespace);
+        if translated.is_empty() {
+            namespace.to_owned()
+        } else {
+            translated.into_iter().next().unwrap_or_else(|| namespace.to_owned())
+        }
     }
 
     /// 翻译整组 tags
