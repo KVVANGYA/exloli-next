@@ -503,12 +503,42 @@ impl ExloliUploader {
                             (original_url.clone(), format!("{}.{}", page.hash(), suffix), false)
                         };
 
-                        // 下载图片（带网络重试机制）
+                        // 下载图片（带网络重试机制和内容验证）
                         let bytes = retry_network_operation(
                             &format!("下载图片 {}", page.page()),
                             || async {
                                 let response = client.get(&download_url).send().await?;
-                                response.bytes().await
+                                
+                                // 检查Content-Type
+                                if let Some(content_type) = response.headers().get("content-type") {
+                                    if let Ok(ct_str) = content_type.to_str() {
+                                        if !ct_str.starts_with("image/") && !ct_str.contains("octet-stream") {
+                                            return Err(anyhow!("响应不是图片类型，Content-Type: {}", ct_str));
+                                        }
+                                    }
+                                }
+                                
+                                let bytes = response.bytes().await?;
+                                
+                                // 检查内容是否为HTML页面或JSON错误响应
+                                if bytes.len() > 10 {
+                                    let content_start = String::from_utf8_lossy(&bytes[..std::cmp::min(200, bytes.len())]);
+                                    let content_lower = content_start.trim_start().to_lowercase();
+                                    if content_lower.starts_with("<!doctype html") || 
+                                       content_lower.starts_with("<html") ||
+                                       content_lower.contains("<title>") ||
+                                       content_lower.contains("<form") {
+                                        return Err(anyhow!("下载到的是HTML页面而不是图片"));
+                                    }
+                                    // 检查是否为images.weserv.nl的JSON错误响应
+                                    if (content_lower.starts_with("{") && content_lower.contains("\"status\"") && content_lower.contains("\"error\"")) ||
+                                       content_lower.contains("\"code\":404") ||
+                                       content_lower.contains("\"message\":") {
+                                        return Err(anyhow!("images.weserv.nl返回错误响应: {}", content_start));
+                                    }
+                                }
+                                
+                                Ok(bytes)
                             }
                         ).await.map_err(|e| {
                             error!("下载图片失败 {}: {}", page.page(), e);
@@ -523,7 +553,37 @@ impl ExloliUploader {
                                 &format!("下载预览图 {}", page.page()),
                                 || async {
                                     let response = client.get(&preview).send().await?;
-                                    response.bytes().await
+                                    
+                                    // 检查Content-Type
+                                    if let Some(content_type) = response.headers().get("content-type") {
+                                        if let Ok(ct_str) = content_type.to_str() {
+                                            if !ct_str.starts_with("image/") && !ct_str.contains("octet-stream") {
+                                                return Err(anyhow!("预览图响应不是图片类型，Content-Type: {}", ct_str));
+                                            }
+                                        }
+                                    }
+                                    
+                                    let bytes = response.bytes().await?;
+                                    
+                                    // 检查内容是否为HTML页面或JSON错误响应
+                                    if bytes.len() > 10 {
+                                        let content_start = String::from_utf8_lossy(&bytes[..std::cmp::min(200, bytes.len())]);
+                                        let content_lower = content_start.trim_start().to_lowercase();
+                                        if content_lower.starts_with("<!doctype html") || 
+                                           content_lower.starts_with("<html") ||
+                                           content_lower.contains("<title>") ||
+                                           content_lower.contains("<form") {
+                                            return Err(anyhow!("下载到的是HTML页面而不是预览图"));
+                                        }
+                                        // 检查是否为JSON错误响应
+                                        if (content_lower.starts_with("{") && content_lower.contains("\"status\"") && content_lower.contains("\"error\"")) ||
+                                           content_lower.contains("\"code\":404") ||
+                                           content_lower.contains("\"message\":") {
+                                            return Err(anyhow!("预览图服务返回错误响应: {}", content_start));
+                                        }
+                                    }
+                                    
+                                    Ok(bytes)
                                 }
                             ).await {
                                 Ok(preview_bytes) => {
@@ -547,7 +607,37 @@ impl ExloliUploader {
                                 &format!("下载预览图 {}", page.page()),
                                 || async {
                                     let response = client.get(&preview).send().await?;
-                                    response.bytes().await
+                                    
+                                    // 检查Content-Type
+                                    if let Some(content_type) = response.headers().get("content-type") {
+                                        if let Ok(ct_str) = content_type.to_str() {
+                                            if !ct_str.starts_with("image/") && !ct_str.contains("octet-stream") {
+                                                return Err(anyhow!("预览图响应不是图片类型，Content-Type: {}", ct_str));
+                                            }
+                                        }
+                                    }
+                                    
+                                    let bytes = response.bytes().await?;
+                                    
+                                    // 检查内容是否为HTML页面或JSON错误响应
+                                    if bytes.len() > 10 {
+                                        let content_start = String::from_utf8_lossy(&bytes[..std::cmp::min(200, bytes.len())]);
+                                        let content_lower = content_start.trim_start().to_lowercase();
+                                        if content_lower.starts_with("<!doctype html") || 
+                                           content_lower.starts_with("<html") ||
+                                           content_lower.contains("<title>") ||
+                                           content_lower.contains("<form") {
+                                            return Err(anyhow!("下载到的是HTML页面而不是预览图"));
+                                        }
+                                        // 检查是否为JSON错误响应
+                                        if (content_lower.starts_with("{") && content_lower.contains("\"status\"") && content_lower.contains("\"error\"")) ||
+                                           content_lower.contains("\"code\":404") ||
+                                           content_lower.contains("\"message\":") {
+                                            return Err(anyhow!("预览图服务返回错误响应: {}", content_start));
+                                        }
+                                    }
+                                    
+                                    Ok(bytes)
                                 }
                             ).await {
                                 Ok(preview_bytes) => {
