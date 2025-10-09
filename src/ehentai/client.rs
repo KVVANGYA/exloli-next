@@ -210,7 +210,9 @@ impl EhClient {
 
             // 收藏数量
             let favorite = html.select_text("#favcount").expect("xpath fail: #favcount");
-            let favorite = favorite.split(' ').next().unwrap().parse().unwrap();
+            let favorite = favorite.split(' ').next()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
 
             // 发布时间
             let posted = &html.select_texts("td.gdt2")[0];
