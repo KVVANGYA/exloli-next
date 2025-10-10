@@ -597,9 +597,7 @@ impl ExloliUploader {
                                 },
                                 Err(e) => {
                                     error!("下载预览图也失败 {}: {}", page.page(), e);
-                                    // 即使预览图失败，也不要让整个画廊失败，而是跳过这张图片
-                                    warn!("跳过图片 {} (原图和预览图都下载失败)", page.page());
-                                    continue;
+                                    return Err(anyhow!("图片 {} 原图和预览图都下载失败: {}", page.page(), e));
                                 }
                             }
                         } else if let Some(b) = bytes {
@@ -650,14 +648,12 @@ impl ExloliUploader {
                                 },
                                 Err(e) => {
                                     error!("下载预览图失败 {}: {}", page.page(), e);
-                                    warn!("跳过图片 {} (原图和预览图都下载失败)", page.page());
-                                    continue;
+                                    return Err(anyhow!("图片 {} 原图和预览图都下载失败: {}", page.page(), e));
                                 }
                             }
                         } else {
                             error!("图片 {} 没有任何可用的下载源", page.page());
-                            warn!("跳过图片 {} (无可用下载源)", page.page());
-                            continue;
+                            return Err(anyhow!("图片 {} 没有任何可用的下载源", page.page()));
                         };
 
                         let bytes = final_bytes.unwrap();
