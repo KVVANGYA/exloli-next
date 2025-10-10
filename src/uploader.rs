@@ -472,12 +472,17 @@ impl ExloliUploader {
                                 let html_text = response.text().await.unwrap_or_default();
                                 let html = Html::parse_document(&html_text);
                                 let selector = Selector::parse("img#img").unwrap();
-                                html.select(&selector)
+                                let preview_src = html.select(&selector)
                                     .next()
                                     .and_then(|ele| ele.value().attr("src"))
-                                    .map(|s| s.to_string())
+                                    .map(|s| s.to_string());
+                                debug!("从页面 {} 解析到预览图URL: {:?}", page.url(), preview_src);
+                                preview_src
                             }
-                            Err(_) => None,
+                            Err(e) => {
+                                warn!("获取页面 {} 失败，无法获取预览图URL: {}", page.url(), e);
+                                None
+                            },
                         };
 
                         let suffix = original_url.split('.').last().unwrap_or("jpg");
@@ -559,14 +564,18 @@ impl ExloliUploader {
                                 &format!("下载预览图 {}", page.page()),
                                 || async {
                                     let response = client.get(&preview).send().await?;
+                                    debug!("预览图响应状态: {}, URL: {}", response.status(), preview);
                                     
                                     // 检查Content-Type
                                     if let Some(content_type) = response.headers().get("content-type") {
                                         if let Ok(ct_str) = content_type.to_str() {
+                                            debug!("预览图Content-Type: {}", ct_str);
                                             if !ct_str.starts_with("image/") && !ct_str.contains("octet-stream") {
                                                 return Err(anyhow!("预览图响应不是图片类型，Content-Type: {}", ct_str));
                                             }
                                         }
+                                    } else {
+                                        debug!("预览图没有Content-Type头");
                                     }
                                     
                                     let bytes = response.bytes().await?;
@@ -610,14 +619,18 @@ impl ExloliUploader {
                                 &format!("下载预览图 {}", page.page()),
                                 || async {
                                     let response = client.get(&preview).send().await?;
+                                    debug!("预览图响应状态: {}, URL: {}", response.status(), preview);
                                     
                                     // 检查Content-Type
                                     if let Some(content_type) = response.headers().get("content-type") {
                                         if let Ok(ct_str) = content_type.to_str() {
+                                            debug!("预览图Content-Type: {}", ct_str);
                                             if !ct_str.starts_with("image/") && !ct_str.contains("octet-stream") {
                                                 return Err(anyhow!("预览图响应不是图片类型，Content-Type: {}", ct_str));
                                             }
                                         }
+                                    } else {
+                                        debug!("预览图没有Content-Type头");
                                     }
                                     
                                     let bytes = response.bytes().await?;
