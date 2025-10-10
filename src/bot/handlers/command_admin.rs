@@ -317,14 +317,14 @@ where
             warn!("删除消息记录失败: {}", e);
         }
         
-        // 3. 删除页面关联记录（这是最重要的，影响图片去重逻辑）
-        if let Err(e) = PageEntity::delete_by_gallery(gallery_id).await {
-            warn!("删除页面记录失败: {}", e);
-        }
-        
-        // 4. 最后删除图片记录，确保使用全新的图片链接而不是旧的ipfs链接
+        // 3. 删除图片记录（必须在删除page记录之前，因为需要通过page表查询）
         if let Err(e) = ImageEntity::delete_by_gallery(gallery_id).await {
             warn!("删除图片记录失败: {}", e);
+        }
+        
+        // 4. 最后删除页面关联记录（这是最重要的，影响图片去重逻辑）
+        if let Err(e) = PageEntity::delete_by_gallery(gallery_id).await {
+            warn!("删除页面记录失败: {}", e);
         }
         
         info!("已清理画廊 {} 的页面、消息、Telegraph和图片记录（保留画廊和评分数据），准备强制重新上传", gallery_id);
