@@ -425,11 +425,7 @@ impl ExloliUploader {
         );
 
         // 创建下载上传的并发任务
-        let s3 = S3Uploader::new(
-            self.config.ipfs.gateway_host.clone(),
-            self.config.ipfs.gateway_date.clone(),
-            self.config.ipfs.teletype_token.clone(),
-        )?;
+        let s3 = S3Uploader::new(self.config.teletype.token.clone())?;
         
         // 使用 Semaphore 来控制并发数量
         let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrent));
@@ -670,7 +666,8 @@ impl ExloliUploader {
                         };
 
                         let bytes = final_bytes.unwrap();
-                        debug!("已下载: {} ({}, {} bytes) {}", page.page(),
+                        debug!("已下载: {} (hash: {}, {}, {} bytes) {}", page.page(),
+                            page.hash(),
                             if used_preview { "预览图" } else if use_compressed { "WebP" } else { suffix },
                             bytes.len(),
                             if used_preview { "（备选方案）" } else { "" });
@@ -695,7 +692,7 @@ impl ExloliUploader {
                                 return Err(anyhow!("上传图片失败 {} (多次重试后仍失败): {}", page.page(), e));
                             }
                         };
-                        debug!("已上传: {} {}", page.page(), if used_preview { "（预览图）" } else { "" });
+                        debug!("已上传: {} (hash: {}) {}", page.page(), page.hash(), if used_preview { "（预览图）" } else { "" });
 
                         // 更新上传进度
                         if let Some(ref callback) = callback_clone {

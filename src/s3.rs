@@ -6,55 +6,27 @@ use tracing::{debug, error};
 #[derive(Clone)]
 pub struct S3Uploader {
     client: Client,
-    gateway_host: String,
-    gateway_date: String,
-    teletype_token: Option<String>,
+    teletype_token: String,
 }
 
 impl S3Uploader {
-    pub fn new(gateway_host: String, gateway_date: String, teletype_token: Option<String>) -> Result<Self> {
+    pub fn new(teletype_token: String) -> Result<Self> {
         let client = Client::new();
-        Ok(Self { client, gateway_host, gateway_date, teletype_token })
+        Ok(Self { client, teletype_token })
     }
 
-    pub async fn upload_multiple<R: AsyncReadExt + Unpin>(
-        &self,
-        uploads: Vec<(&str, &mut R)>,
-    ) -> Result<Vec<String>> {
-        let mut urls = Vec::new();
-        
-        for (name, reader) in uploads {
-            let url = if self.teletype_token.is_some() {
-                match self.upload_to_teletype(name, reader).await {
-                    Ok(url) => Ok(url),
-                    Err(e) => {
-                        debug!("Teletype上传失败，尝试备用上传方式: {}", e);
-                        let mut buffer = Vec::new();
-                        reader.read_to_end(&mut buffer).await?;
-                        self.upload_fallback(name, &buffer).await
-                    }
-                }
-            } else {
-                self.upload(name, reader).await
-            };
-            
-            urls.push(url?);
-        }
-        
-        Ok(urls)
-    }
 
     pub async fn upload_to_teletype<R: AsyncReadExt + Unpin>(
         &self,
         name: &str,
         reader: &mut R,
     ) -> Result<String> {
-        let token = self.teletype_token.as_ref().ok_or(anyhow::anyhow!("Authorization token is required"))?;
+        let token = &self.teletype_token;
         
         let mut buffer = Vec::new();
         reader.read_to_end(&mut buffer).await?;
 
-        debug!("正在上传到teletype.in: 文件名: {}, 大小: {} 字节, Authorization: {}, Authorization.Clone: {}", name, buffer.len(), token, token.clone());
+        debug!("正在上传到teletype.in: 文件名: {}, 大小: {} 字节", name, buffer.len());
 
         let file_extension = name.split('.').last().unwrap_or("jpg");
         let content_type = match file_extension.to_lowercase().as_str() {
@@ -77,7 +49,7 @@ impl S3Uploader {
         let response = self
             .client
             .put("https://teletype.in/media/") // 一定要添加尾部斜杠
-            .header("Authorization", token.clone())
+            .header("Authorization", token)
             .multipart(form)
             .send()
             .await?;
@@ -94,7 +66,7 @@ impl S3Uploader {
         }
         
         let response_text = response.text().await?;
-        debug!("Teletype上传成功: 响应: {}", response_text);
+        debug!("Teletype上传成功 ({}): 响应: {}", name, response_text);
         
         // 解析JSON响应
         let url = match serde_json::from_str::<serde_json::Value>(&response_text) {
@@ -118,7 +90,7 @@ impl S3Uploader {
             }
         };
         
-        debug!("提取的URL: {}", url);
+        debug!("提取的URL ({}): {}", name, url);
         
         if url.is_empty() || !url.starts_with("http") {
             return Err(anyhow::anyhow!("提取的URL无效: {}", url));
@@ -127,62 +99,12 @@ impl S3Uploader {
         Ok(url)
     }
 
-    async fn upload_fallback(&self, name: &str, buffer: &[u8]) -> Result<String> {
-        debug!("使用备用方式上传: {}", name);
-        
-        let form = reqwest::multipart::Form::new()
-            .part("file", reqwest::multipart::Part::bytes(buffer.to_vec()).file_name(name.to_string()));
-
-        let response = self
-            .client
-            .post("https://api.img2ipfs.org/api/v0/add?pin=false")
-            .multipart(form)
-            .send()
-            .await?
-            .json::<serde_json::Value>()
-            .await?;
-
-        let hash = response["Hash"].as_str().ok_or(anyhow::anyhow!("Invalid response"))?;
-        let name = response["Name"].as_str().ok_or(anyhow::anyhow!("Invalid response"))?;
-        let url = format!("{}{}/?{}&filename={}", self.gateway_host, hash, self.gateway_date, name);
-
-        Ok(url)
-    }
 
     pub async fn upload<R: AsyncReadExt + Unpin>(
         &self,
         name: &str,
         reader: &mut R,
     ) -> Result<String> {
-        if self.teletype_token.is_some() {
-            match self.upload_to_teletype(name, reader).await {
-                Ok(url) => return Ok(url),
-                Err(e) => {
-                    debug!("Teletype上传失败，尝试备用上传方式: {}", e);
-                    // 错误时继续执行下面的备用上传代码
-                }
-            }
-        }
-        
-        let mut buffer = Vec::new();
-        reader.read_to_end(&mut buffer).await?;
-
-        let form = reqwest::multipart::Form::new()
-            .part("file", reqwest::multipart::Part::bytes(buffer).file_name(name.to_string()));
-
-        let response = self
-            .client
-            .post("https://api.img2ipfs.org/api/v0/add?pin=false")
-            .multipart(form)
-            .send()
-            .await?
-            .json::<serde_json::Value>()
-            .await?;
-
-        let hash = response["Hash"].as_str().ok_or(anyhow::anyhow!("Invalid response"))?;
-        let name = response["Name"].as_str().ok_or(anyhow::anyhow!("Invalid response"))?;
-        let url = format!("{}{}/?{}&filename={}", self.gateway_host, hash, self.gateway_date, name);
-
-        Ok(url)
+        self.upload_to_teletype(name, reader).await
     }
 }

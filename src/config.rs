@@ -29,7 +29,7 @@ pub struct Config {
     pub telegraph: Telegraph,
     pub telegram: Telegram,
     pub s3: S3,
-    pub ipfs: Ipfs,
+    pub teletype: Teletype,
     pub backup: Backup,
 }
 
@@ -91,11 +91,9 @@ pub struct S3 {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct Ipfs {
-    pub gateway_host: String,
-    pub gateway_date: String,
+pub struct Teletype {
     /// teletype.in 授权令牌
-    pub teletype_token: Option<String>,
+    pub token: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
