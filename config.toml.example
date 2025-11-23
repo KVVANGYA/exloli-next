@@ -79,8 +79,10 @@ secret_key = "sk"
 # 桶绑定的域名
 host = "example.com"
 
+[teletype]
+# teletype.in 授权令牌
+token = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
 [ipfs]
 gateway_host = "https://ipfs.io/ipfs/"
 gateway_date = "1"
-# teletype.in 授权令牌 (可选)
-# teletype_token = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
