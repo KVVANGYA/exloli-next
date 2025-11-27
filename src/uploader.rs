@@ -262,8 +262,11 @@ impl ExloliUploader {
         }
 
         let gallery = self.ehentai.get_gallery(gallery).await?;
-        // 上传图片、发布文章
-        self.upload_gallery_image_with_progress(&gallery, check, progress_callback).await?;
+        // 上传图片、发布文章；如果画廊上传过程中出现错误，则跳过该画廊，等待下次扫描重试
+        if let Err(e) = self.upload_gallery_image_with_progress(&gallery, check, progress_callback).await {
+            warn!("画廊 {} 上传失败，跳过本次上传: {}", gallery.url().url(), e);
+            return Ok(());
+        }
         let article = self.publish_telegraph_article(&gallery).await?;
         // 发送消息
         let text = self.create_message_text(&gallery, &article.url).await?;
