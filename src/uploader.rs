@@ -542,8 +542,7 @@ impl ExloliUploader {
 
                         // 下载图片（带网络重试机制和内容验证）
                         let bytes = retry_network_operation_with_limit(
-                            &format!("����ͼƬ {}", page.page()),
-                            3,
+                            &format!("����ͼƬ {}", page.page()), 7,
                             || async {
                                 let response = client.get(&download_url).send().await?;
                                 
@@ -587,8 +586,7 @@ impl ExloliUploader {
                             let preview = preview_url.unwrap();
                             info!("原图下载失败，使用预览图作为备用方案: {}", preview);
                                                         match retry_network_operation_with_limit(
-                                &format!("����Ԥ��ͼ {}", page.page()),
-                                3,
+                                &format!("����Ԥ��ͼ {}", page.page()), 7,
                                 || async {
                                     let response = client.get(&preview).send().await?;
                                     debug!("预览图响应状态: {}, URL: {}", response.status(), preview);
@@ -643,8 +641,7 @@ impl ExloliUploader {
                             let preview = preview_url.unwrap();
                             info!("原图下载失败，尝试预览图: {}", preview);
                                                         match retry_network_operation_with_limit(
-                                &format!("����Ԥ��ͼ {}", page.page()),
-                                3,
+                                &format!("����Ԥ��ͼ {}", page.page()), 7,
                                 || async {
                                     let response = client.get(&preview).send().await?;
                                     debug!("预览图响应状态: {}, URL: {}", response.status(), preview);
@@ -1007,6 +1004,7 @@ impl ExloliUploader {
         Ok(())
     }
 }
+
 
 
 
