@@ -177,20 +177,33 @@ impl ExloliUploader {
                 processed_count += 1;
                 info!("处理画廊 {}/{}: {}", processed_count, self.config.exhentai.search_count, next.url());
                 
-                // 错误不要上抛，避免影响后续画廊
-                if let Err(err) = self.try_update(&next, true).await {
-                    error_count += 1;
-                    error!("check_and_update: {:?}\n{}", err, Backtrace::force_capture());
-                }
-                if let Err(err) = self.try_upload(&next, true).await {
-                    error_count += 1;
-                    error!("check_and_upload: {:?}\n{}", err, Backtrace::force_capture());
-                    // 通知管理员上传失败 (但不让通知失败影响主流程)
-                    if let Err(notify_err) = std::panic::AssertUnwindSafe(
-                        self.notify_admins(&format!("画廊上传失败\n\nURL: {}\n错误: {}", next.url(), err))
-                    ).catch_unwind().await {
-                        error!("通知管理员失败: {:?}", notify_err);
+                // 捕获单个画廊的异常，避免中断整个扫描循环
+                let gallery_result = std::panic::AssertUnwindSafe(async {
+                    if let Err(err) = self.try_update(&next, true).await {
+                        error_count += 1;
+                        error!("check_and_update: {:?}\n{}", err, Backtrace::force_capture());
                     }
+                    if let Err(err) = self.try_upload(&next, true).await {
+                        error_count += 1;
+                        error!("check_and_upload: {:?}\n{}", err, Backtrace::force_capture());
+                        warn!("画廊 {} 处理失败，跳过本次，等待下次扫描重试", next.url());
+                        if let Err(notify_err) = std::panic::AssertUnwindSafe(
+                            self.notify_admins(&format!("自动上传失败\n\nURL: {}\n错误: {}", next.url(), err))
+                        ).catch_unwind().await {
+                            error!("通知管理员失败: {:?}", notify_err);
+                        }
+                    }
+                })
+                .catch_unwind()
+                .await;
+
+                if let Err(panic_err) = gallery_result {
+                    error_count += 1;
+                    error!(
+                        "处理画廊 {} 时发生未捕获的 panic，已跳过该画廊，等待下次扫描: {:?}",
+                        next.url(),
+                        panic_err
+                    );
                 }
                 time::sleep(Duration::from_secs(1)).await;
             }
@@ -975,3 +988,4 @@ impl ExloliUploader {
         Ok(())
     }
 }
+
