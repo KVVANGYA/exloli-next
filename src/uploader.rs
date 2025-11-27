@@ -107,7 +107,6 @@ where
 
     unreachable!()
 }
-}
 
 #[derive(Debug, Clone)]
 pub struct UploadProgress {
