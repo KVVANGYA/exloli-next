@@ -53,15 +53,31 @@ where
 }
 
 /// 改进的重试机制，针对网络错误提供更多重试次数
-async fn retry_network_operation<T, E, F, Fut>(operation_name: &str, mut func: F) -> Result<T, E>
+async fn retry_network_operation<T, E, F, Fut>(operation_name: &str, func: F) -> Result<T, E>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, E>>,
+    E: std::fmt::Display,
+{
+    retry_network_operation_with_limit(operation_name, 7, func).await
+}
+
+/// 带上限参数的网络重试封装，便于在敏感操作上缩短失败等待时间
+async fn retry_network_operation_with_limit<T, E, F, Fut>(
+    operation_name: &str,
+    max_retries: usize,
+    mut func: F,
+) -> Result<T, E>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T, E>>,
     E: std::fmt::Display,
 {
     const MAX_RETRIES: usize = 7; // 网络操作给更多重试机会
-    
-    for attempt in 1..=MAX_RETRIES {
+
+    let max_retries = max_retries.min(MAX_RETRIES).max(1);
+
+    for attempt in 1..=max_retries {
         match func().await {
             Ok(result) => {
                 if attempt > 1 {
@@ -70,26 +86,27 @@ where
                 return Ok(result);
             }
             Err(err) => {
-                if attempt >= MAX_RETRIES {
-                    error!("{} 重试 {} 次后仍失败: {}", operation_name, MAX_RETRIES, err);
+                if attempt >= max_retries {
+                    error!("{} 重试 {} 次后仍失败: {}", operation_name, max_retries, err);
                     return Err(err);
                 }
-                
+
                 // 更保守的退避策略：前几次快速重试，后面延迟增加
                 let delay = if attempt <= 3 {
                     Duration::from_secs(attempt as u64) // 1s, 2s, 3s
                 } else {
                     Duration::from_secs(5 + ((attempt - 3) * 5) as u64) // 10s, 15s, 20s, 25s
                 };
-                
-                warn!("{} 失败 (尝试 {}/{}): {}, {}秒后重试", 
-                      operation_name, attempt, MAX_RETRIES, err, delay.as_secs());
+
+                warn!("{} 失败 (尝试 {}/{}): {}, {}秒后重试",
+                      operation_name, attempt, max_retries, err, delay.as_secs());
                 time::sleep(delay).await;
             }
         }
     }
-    
+
     unreachable!()
+}
 }
 
 #[derive(Debug, Clone)]
@@ -525,8 +542,9 @@ impl ExloliUploader {
                         };
 
                         // 下载图片（带网络重试机制和内容验证）
-                        let bytes = retry_network_operation(
-                            &format!("下载图片 {}", page.page()),
+                        let bytes = retry_network_operation_with_limit(
+                            &format!("����ͼƬ {}", page.page()),
+                            3,
                             || async {
                                 let response = client.get(&download_url).send().await?;
                                 
@@ -569,8 +587,9 @@ impl ExloliUploader {
                         let (final_bytes, final_filename, used_preview) = if bytes.is_none() && preview_url.is_some() {
                             let preview = preview_url.unwrap();
                             info!("原图下载失败，使用预览图作为备用方案: {}", preview);
-                            match retry_network_operation(
-                                &format!("下载预览图 {}", page.page()),
+                                                        match retry_network_operation_with_limit(
+                                &format!("����Ԥ��ͼ {}", page.page()),
+                                3,
                                 || async {
                                     let response = client.get(&preview).send().await?;
                                     debug!("预览图响应状态: {}, URL: {}", response.status(), preview);
@@ -624,8 +643,9 @@ impl ExloliUploader {
                             // 如果原图失败但有预览图，尝试预览图
                             let preview = preview_url.unwrap();
                             info!("原图下载失败，尝试预览图: {}", preview);
-                            match retry_network_operation(
-                                &format!("下载预览图 {}", page.page()),
+                                                        match retry_network_operation_with_limit(
+                                &format!("����Ԥ��ͼ {}", page.page()),
+                                3,
                                 || async {
                                     let response = client.get(&preview).send().await?;
                                     debug!("预览图响应状态: {}, URL: {}", response.status(), preview);
@@ -694,15 +714,15 @@ impl ExloliUploader {
 
                         // 上传到 S3（带网络重试机制）
                         let upload_url = match retry_network_operation(
-                            &format!("上传图片 {}", page.page()), 
+                            &format!("����ͼƬ {}", page.page()), 
                             || async {
                                 s3_clone.upload(&final_filename, &mut bytes.as_ref()).await
                             }
                         ).await {
                             Ok(url) => url,
                             Err(e) => {
-                                error!("上传图片失败 {} (多次重试后仍失败): {}", page.page(), e);
-                                return Err(anyhow!("上传图片失败 {} (多次重试后仍失败): {}", page.page(), e));
+                                error!("�ϴ�ͼƬʧ�� {} (������Ժ���ʧ��): {}", page.page(), e);
+                                return Err(anyhow!("�ϴ�ͼƬʧ�� {} (������Ժ���ʧ��): {}", page.page(), e));
                             }
                         };
                         debug!("已上传: {} (hash: {}) {}", page.page(), page.hash(), if used_preview { "（预览图）" } else { "" });
@@ -988,4 +1008,8 @@ impl ExloliUploader {
         Ok(())
     }
 }
+
+
+
+
 
