@@ -262,32 +262,38 @@ impl ExloliUploader {
         }
 
         let gallery = self.ehentai.get_gallery(gallery).await?;
-        // 上传图片、发布文章；如果画廊上传过程中出现错误，则跳过该画廊，等待下次扫描重试
-        if let Err(e) = self.upload_gallery_image_with_progress(&gallery, check, progress_callback).await {
-            warn!("画廊 {} 上传失败，跳过本次上传: {}", gallery.url().url(), e);
-            return Ok(());
-        }
-        let article = self.publish_telegraph_article(&gallery).await?;
-        // 发送消息
-        let text = self.create_message_text(&gallery, &article.url).await?;
-        // FIXME: 此处没有考虑到父画廊没有上传，但是父父画廊上传过的情况
-        // 不过一般情况下画廊应该不会那么短时间内更新多次
-        let msg = if let Some(parent) = &gallery.parent {
-            if let Some(pmsg) = MessageEntity::get_by_gallery(parent.id()).await? {
-                self.bot
-                    .send_message(self.config.telegram.channel_id.clone(), text)
-                    .reply_to_message_id(MessageId(pmsg.id))
-                    .await?
+
+        // 把整个画廊处理包裹起来；任一步失败直接跳过本画廊，避免终止扫描循环
+        let gallery_url = gallery.url().url().to_string();
+        let process_gallery = async {
+            self.upload_gallery_image_with_progress(&gallery, check, progress_callback).await?;
+
+            let article = self.publish_telegraph_article(&gallery).await?;
+            let text = self.create_message_text(&gallery, &article.url).await?;
+
+            let msg = if let Some(parent) = &gallery.parent {
+                if let Some(pmsg) = MessageEntity::get_by_gallery(parent.id()).await? {
+                    self.bot
+                        .send_message(self.config.telegram.channel_id.clone(), text)
+                        .reply_to_message_id(MessageId(pmsg.id))
+                        .await?
+                } else {
+                    self.bot.send_message(self.config.telegram.channel_id.clone(), text).await?
+                }
             } else {
                 self.bot.send_message(self.config.telegram.channel_id.clone(), text).await?
-            }
-        } else {
-            self.bot.send_message(self.config.telegram.channel_id.clone(), text).await?
+            };
+
+            MessageEntity::create(msg.id.0, gallery.url.id()).await?;
+            TelegraphEntity::create(gallery.url.id(), &article.url).await?;
+            GalleryEntity::create(&gallery).await?;
+            Ok::<(), anyhow::Error>(())
         };
-        // 数据入库
-        MessageEntity::create(msg.id.0, gallery.url.id()).await?;
-        TelegraphEntity::create(gallery.url.id(), &article.url).await?;
-        GalleryEntity::create(&gallery).await?;
+
+        if let Err(e) = process_gallery.await {
+            warn!("画廊 {} 处理失败，跳过本次上传: {}", gallery_url, e);
+            return Ok(());
+        }
 
         Ok(())
     }
