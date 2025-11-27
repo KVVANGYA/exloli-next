@@ -542,7 +542,7 @@ impl ExloliUploader {
 
                         // 下载图片（带网络重试机制和内容验证）
                         let bytes = retry_network_operation_with_limit(
-                            &format!("����ͼƬ {}", page.page()), 7,
+                            &format!("下载图片 {}", page.page()), 7,
                             || async {
                                 let response = client.get(&download_url).send().await?;
                                 
