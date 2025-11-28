@@ -73,7 +73,7 @@ where
     Fut: std::future::Future<Output = Result<T, E>>,
     E: std::fmt::Display,
 {
-    const MAX_RETRIES: usize = 7; // 网络操作给更多重试机会
+    const MAX_RETRIES: usize = 1; // 快速失败，交由上层跳过画廊
 
     let max_retries = max_retries.min(MAX_RETRIES).max(1);
 
@@ -1013,6 +1013,7 @@ impl ExloliUploader {
         Ok(())
     }
 }
+
 
 
 
