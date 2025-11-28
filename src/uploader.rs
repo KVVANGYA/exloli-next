@@ -73,7 +73,7 @@ where
     Fut: std::future::Future<Output = Result<T, E>>,
     E: std::fmt::Display,
 {
-    const MAX_RETRIES: usize = 3; // 允许更多重试次数，减少因临时网络问题导致的画廊跳过
+    const MAX_RETRIES: usize = 10; // 允许更多重试次数，减少因临时网络问题导致的画廊跳过
 
     let max_retries = max_retries.min(MAX_RETRIES).max(1);
 
@@ -104,7 +104,7 @@ where
             }
         }
     }
-
+    
     unreachable!()
 }
 
@@ -171,6 +171,8 @@ impl ExloliUploader {
             info!("⏰ 下次扫描将在 {} 开始", 
                   (chrono::Utc::now() + chrono::Duration::from_std(self.config.interval).unwrap())
                   .format("%Y-%m-%d %H:%M:%S UTC"));
+                  
+            // 确保即使在错误情况下也继续运行
             time::sleep(self.config.interval).await;
         }
     }
@@ -221,6 +223,9 @@ impl ExloliUploader {
                         panic_err
                     );
                 }
+                
+                // 确保即使在错误情况下也继续处理下一个画廊
+                info!("完成画廊 {} 的处理，准备处理下一个画廊", next.url());
                 time::sleep(Duration::from_secs(1)).await;
             }
             
@@ -232,6 +237,8 @@ impl ExloliUploader {
             error!("扫描过程中发生严重错误（panic）: {:?}", panic_err);
             // 即使发生panic，也要让程序继续运行
         }
+        
+        info!("check函数执行完毕，程序将继续运行");
     }
 
     /// 检查指定画廊是否已经上传，如果没有则进行上传
@@ -582,7 +589,6 @@ impl ExloliUploader {
                                        content_lower.contains("<form") {
                                         return Err(anyhow!("下载到的是HTML页面而不是图片"));
                                     }
-                                    // 检查是否为images.weserv.nl的JSON错误响应
                                     if (content_lower.starts_with("{") && content_lower.contains("\"status\"") && content_lower.contains("\"error\"")) ||
                                        (content_lower.starts_with("{") && content_lower.contains("\"code\"") && content_lower.contains("\"message\"")) {
                                         return Err(anyhow!("images.weserv.nl返回错误响应: {}", content_start));
@@ -600,8 +606,8 @@ impl ExloliUploader {
                         let (final_bytes, final_filename, used_preview) = if bytes.is_none() && preview_url.is_some() {
                             let preview = preview_url.unwrap();
                             info!("原图下载失败，使用预览图作为备用方案: {}", preview);
-                                                        match retry_network_operation_with_limit(
-                                &format!("����Ԥ��ͼ {}", page.page()), 7,
+                            match retry_network_operation_with_limit(
+                                &format!("下载预览图 {}", page.page()), 7,
                                 || async {
                                     let response = client.get(&preview).send().await?;
                                     debug!("预览图响应状态: {}, URL: {}", response.status(), preview);
@@ -614,30 +620,23 @@ impl ExloliUploader {
                                                 return Err(anyhow!("预览图响应不是图片类型，Content-Type: {}", ct_str));
                                             }
                                         }
-                                    } else {
-                                        debug!("预览图没有Content-Type头");
                                     }
                                     
-                                    let bytes = response.bytes().await?;
+                                    let preview_bytes = response.bytes().await?;
                                     
-                                    // 检查内容是否为HTML页面或JSON错误响应
-                                    if bytes.len() > 10 {
-                                        let content_start = String::from_utf8_lossy(&bytes[..std::cmp::min(200, bytes.len())]);
+                                    // 检查内容是否为HTML页面
+                                    if preview_bytes.len() > 10 {
+                                        let content_start = String::from_utf8_lossy(&preview_bytes[..std::cmp::min(200, preview_bytes.len())]);
                                         let content_lower = content_start.trim_start().to_lowercase();
                                         if content_lower.starts_with("<!doctype html") || 
                                            content_lower.starts_with("<html") ||
                                            content_lower.contains("<title>") ||
                                            content_lower.contains("<form") {
-                                            return Err(anyhow!("下载到的是HTML页面而不是预览图"));
-                                        }
-                                        // 检查是否为JSON错误响应
-                                        if (content_lower.starts_with("{") && content_lower.contains("\"status\"") && content_lower.contains("\"error\"")) ||
-                                           (content_lower.starts_with("{") && content_lower.contains("\"code\"") && content_lower.contains("\"message\"")) {
-                                            return Err(anyhow!("预览图服务返回错误响应: {}", content_start));
+                                            return Err(anyhow!("下载到的是HTML页面而不是图片"));
                                         }
                                     }
                                     
-                                    Ok(bytes)
+                                    Ok(preview_bytes)
                                 }
                             ).await {
                                 Ok(preview_bytes) => {
@@ -655,8 +654,8 @@ impl ExloliUploader {
                             // 如果原图失败但有预览图，尝试预览图
                             let preview = preview_url.unwrap();
                             info!("原图下载失败，尝试预览图: {}", preview);
-                                                        match retry_network_operation_with_limit(
-                                &format!("����Ԥ��ͼ {}", page.page()), 7,
+                            match retry_network_operation_with_limit(
+                                &format!("下载预览图 {}", page.page()), 7,
                                 || async {
                                     let response = client.get(&preview).send().await?;
                                     debug!("预览图响应状态: {}, URL: {}", response.status(), preview);
@@ -669,30 +668,23 @@ impl ExloliUploader {
                                                 return Err(anyhow!("预览图响应不是图片类型，Content-Type: {}", ct_str));
                                             }
                                         }
-                                    } else {
-                                        debug!("预览图没有Content-Type头");
                                     }
                                     
-                                    let bytes = response.bytes().await?;
+                                    let preview_bytes = response.bytes().await?;
                                     
-                                    // 检查内容是否为HTML页面或JSON错误响应
-                                    if bytes.len() > 10 {
-                                        let content_start = String::from_utf8_lossy(&bytes[..std::cmp::min(200, bytes.len())]);
+                                    // 检查内容是否为HTML页面
+                                    if preview_bytes.len() > 10 {
+                                        let content_start = String::from_utf8_lossy(&preview_bytes[..std::cmp::min(200, preview_bytes.len())]);
                                         let content_lower = content_start.trim_start().to_lowercase();
                                         if content_lower.starts_with("<!doctype html") || 
                                            content_lower.starts_with("<html") ||
                                            content_lower.contains("<title>") ||
                                            content_lower.contains("<form") {
-                                            return Err(anyhow!("下载到的是HTML页面而不是预览图"));
-                                        }
-                                        // 检查是否为JSON错误响应
-                                        if (content_lower.starts_with("{") && content_lower.contains("\"status\"") && content_lower.contains("\"error\"")) ||
-                                           (content_lower.starts_with("{") && content_lower.contains("\"code\"") && content_lower.contains("\"message\"")) {
-                                            return Err(anyhow!("预览图服务返回错误响应: {}", content_start));
+                                            return Err(anyhow!("下载到的是HTML页面而不是图片"));
                                         }
                                     }
                                     
-                                    Ok(bytes)
+                                    Ok(preview_bytes)
                                 }
                             ).await {
                                 Ok(preview_bytes) => {
@@ -975,8 +967,14 @@ impl ExloliUploader {
 async fn flatten<T>(handle: JoinHandle<Result<T>>) -> Result<T> {
     match handle.await {
         Ok(Ok(result)) => Ok(result),
-        Ok(Err(err)) => Err(err),
-        Err(err) => bail!(err),
+        Ok(Err(err)) => {
+            // 任务内部错误，返回错误以便上层处理
+            Err(err)
+        },
+        Err(err) => {
+            // JoinHandle本身错误（如线程panic），转换为常规错误
+            Err(anyhow::anyhow!("任务执行失败: {:?}", err))
+        },
     }
 }
 
