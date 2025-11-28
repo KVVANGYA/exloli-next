@@ -199,11 +199,11 @@ impl ExloliUploader {
                 let gallery_result = std::panic::AssertUnwindSafe(async {
                     if let Err(err) = self.try_update(&next, true).await {
                         error_count += 1;
-                        error!("check_and_update: {:?}\n{}", err, Backtrace::force_capture());
+                        error!("check_and_update 失败: {:?}\n{}", err, Backtrace::force_capture());
                     }
                     if let Err(err) = self.try_upload(&next, true).await {
                         error_count += 1;
-                        error!("check_and_upload: {:?}\n{}", err, Backtrace::force_capture());
+                        error!("check_and_upload 失败: {:?}\n{}", err, Backtrace::force_capture());
                         warn!("画廊 {} 处理失败，跳过本次，等待下次扫描重试", next.url());
                         if let Err(notify_err) = std::panic::AssertUnwindSafe(
                             self.notify_admins(&format!("自动上传失败\n\nURL: {}\n错误: {}", next.url(), err))
@@ -271,8 +271,9 @@ impl ExloliUploader {
         let gallery = self.ehentai.get_gallery(gallery).await?;
 
         // 把整个画廊处理包裹起来；任一步失败直接跳过本画廊，避免终止扫描循环
+        // 但如果是因为图片问题导致的失败，则应该传播错误以跳过整个画廊
         let gallery_url = gallery.url().url().to_string();
-        let process_gallery = async {
+        let result = async {
             self.upload_gallery_image_with_progress(&gallery, check, progress_callback).await?;
 
             let article = self.publish_telegraph_article(&gallery).await?;
@@ -295,11 +296,18 @@ impl ExloliUploader {
             TelegraphEntity::create(gallery.url.id(), &article.url).await?;
             GalleryEntity::create(&gallery).await?;
             Ok::<(), anyhow::Error>(())
-        };
+        }.await;
 
-        if let Err(e) = process_gallery.await {
-            warn!("画廊 {} 处理失败，跳过本次上传: {}", gallery_url, e);
-            return Ok(());
+        if let Err(e) = result {
+            // 检查错误是否包含跳过整个画廊的指示
+            if e.to_string().contains("跳过整个画廊") {
+                // 传播错误以跳过整个画廊
+                return Err(e);
+            } else {
+                // 其他错误可以记录并跳过
+                warn!("画廊 {} 处理失败，跳过本次上传: {}", gallery_url, e);
+                return Ok(());
+            }
         }
 
         Ok(())
