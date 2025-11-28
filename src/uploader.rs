@@ -73,7 +73,7 @@ where
     Fut: std::future::Future<Output = Result<T, E>>,
     E: std::fmt::Display,
 {
-    const MAX_RETRIES: usize = 1; // 快速失败，交由上层跳过画廊
+    const MAX_RETRIES: usize = 3; // 允许更多重试次数，减少因临时网络问题导致的画廊跳过
 
     let max_retries = max_retries.min(MAX_RETRIES).max(1);
 
@@ -706,7 +706,8 @@ impl ExloliUploader {
                             }
                         } else {
                             error!("图片 {} 没有任何可用的下载源", page.page());
-                            return Err(anyhow!("图片 {} 没有任何可用的下载源", page.page()));
+                            // 当任何一张图片无法下载时，应该跳过整个画廊
+                            return Err(anyhow!("图片 {} 没有任何可用的下载源，跳过整个画廊", page.page()));
                         };
 
                         let bytes = final_bytes.unwrap();
@@ -725,15 +726,16 @@ impl ExloliUploader {
 
                         // 上传到 S3（带网络重试机制）
                         let upload_url = match retry_network_operation(
-                            &format!("����ͼƬ {}", page.page()), 
+                            &format!("上传图片 {}", page.page()), 
                             || async {
                                 s3_clone.upload(&final_filename, &mut bytes.as_ref()).await
                             }
                         ).await {
                             Ok(url) => url,
                             Err(e) => {
-                                error!("�ϴ�ͼƬʧ�� {} (������Ժ���ʧ��): {}", page.page(), e);
-                                return Err(anyhow!("�ϴ�ͼƬʧ�� {} (������Ժ���ʧ��): {}", page.page(), e));
+                                error!("上传图片失败 {} (重试后仍失败): {}", page.page(), e);
+                                // 当任何一张图片上传失败时，应该跳过整个画廊
+                                return Err(anyhow!("上传图片失败 {} (重试后仍失败)，跳过整个画廊: {}", page.page(), e));
                             }
                         };
                         debug!("已上传: {} (hash: {}) {}", page.page(), page.hash(), if used_preview { "（预览图）" } else { "" });
@@ -748,11 +750,13 @@ impl ExloliUploader {
                         // 保存到数据库
                         if let Err(e) = ImageEntity::create(fileindex, page.hash(), &upload_url).await {
                             error!("保存图片记录失败 {}: {}", page.page(), e);
-                            return Err(anyhow!("保存图片记录失败 {}: {}", page.page(), e));
+                            // 当任何一张图片保存失败时，应该跳过整个画廊
+                            return Err(anyhow!("保存图片记录失败 {}，跳过整个画廊: {}", page.page(), e));
                         }
                         if let Err(e) = PageEntity::create(page.gallery_id(), page.page(), fileindex).await {
                             error!("保存页面记录失败 {}: {}", page.page(), e);
-                            return Err(anyhow!("保存页面记录失败 {}: {}", page.page(), e));
+                            // 当任何一张图片保存失败时，应该跳过整个画廊
+                            return Err(anyhow!("保存页面记录失败 {}，跳过整个画廊: {}", page.page(), e));
                         }
                     }
                     Result::<()>::Ok(())
