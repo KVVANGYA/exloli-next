@@ -424,6 +424,7 @@ impl ExloliUploader {
         
         // 进度跟踪变量
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
         use tokio::sync::Mutex;
         let progress = Arc::new(Mutex::new(UploadProgress {
             gallery_id: gallery.url.id(),
@@ -434,13 +435,18 @@ impl ExloliUploader {
         }));
         
         let callback_arc = progress_callback.map(Arc::new);
+        let cancelled = Arc::new(AtomicBool::new(false));
         
         // 获取图片链接时不要并行，避免触发反爬限制
         let progress_clone_parser = progress.clone();
         let callback_clone_parser = callback_arc.clone();
+        let cancel_clone_parser = cancelled.clone();
         let getter = tokio::spawn(
             async move {
                 for page in pages {
+                    if cancel_clone_parser.load(Ordering::Relaxed) {
+                        break;
+                    }
                     let rst = client.get_image_url(&page).await?;
                     info!("已解析：{}", page.page());
                     
