@@ -203,13 +203,14 @@ impl ExloliUploader {
                     }
                     if let Err(err) = self.try_upload(&next, true).await {
                         // 检查错误是否包含跳过整个画廊的指示
-                        if err.to_string().contains("跳过整个画廊") {
+                        let error_str = err.to_string();
+                        if error_str.contains("跳过整个画廊") {
                             // 这种错误应该被记录但不影响其他画廊的处理
                             error_count += 1;
                             error!("画廊 {} 处理失败，跳过整个画廊: {:?}\n{}", next.url(), err, Backtrace::force_capture());
                             warn!("画廊 {} 跳过，继续处理下一个画廊", next.url());
                             if let Err(notify_err) = std::panic::AssertUnwindSafe(
-                                self.notify_admins(&format!("自动上传失败\n\nURL: {}\n错误: {}", next.url(), err))
+                                self.notify_admins(&format!("自动上传失败\n\nURL: {}\n错误: {}", next.url(), error_str))
                             ).catch_unwind().await {
                                 error!("通知管理员失败: {:?}", notify_err);
                             }
@@ -218,7 +219,7 @@ impl ExloliUploader {
                             error!("check_and_upload 失败: {:?}\n{}", err, Backtrace::force_capture());
                             warn!("画廊 {} 处理失败，跳过本次，等待下次扫描重试", next.url());
                             if let Err(notify_err) = std::panic::AssertUnwindSafe(
-                                self.notify_admins(&format!("自动上传失败\n\nURL: {}\n错误: {}", next.url(), err))
+                                self.notify_admins(&format!("自动上传失败\n\nURL: {}\n错误: {}", next.url(), error_str))
                             ).catch_unwind().await {
                                 error!("通知管理员失败: {:?}", notify_err);
                             }
@@ -313,12 +314,14 @@ impl ExloliUploader {
 
         if let Err(e) = result {
             // 检查错误是否包含跳过整个画廊的指示
-            if e.to_string().contains("跳过整个画廊") {
+            let error_str = e.to_string();
+            if error_str.contains("跳过整个画廊") {
                 // 传播错误以跳过整个画廊
+                warn!("画廊 {} 处理失败，跳过整个画廊: {}", gallery_url, error_str);
                 return Err(e);
             } else {
                 // 其他错误可以记录并跳过
-                warn!("画廊 {} 处理失败，跳过本次上传: {}", gallery_url, e);
+                warn!("画廊 {} 处理失败，跳过本次上传: {}", gallery_url, error_str);
                 return Ok(());
             }
         }
@@ -990,10 +993,12 @@ async fn flatten<T>(handle: JoinHandle<Result<T>>) -> Result<T> {
         Ok(Ok(result)) => Ok(result),
         Ok(Err(err)) => {
             // 任务内部错误，返回错误以便上层处理
+            // 保持原始错误信息，特别是"跳过整个画廊"的指示
             Err(err)
         },
         Err(err) => {
             // JoinHandle本身错误（如线程panic），转换为常规错误
+            // 但需要保持原始错误信息，特别是"跳过整个画廊"的指示
             Err(anyhow::anyhow!("任务执行失败: {:?}", err))
         },
     }
