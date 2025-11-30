@@ -288,7 +288,9 @@ impl ExloliUploader {
         // 但如果是因为图片问题导致的失败，则应该传播错误以跳过整个画廊
         let gallery_url = gallery.url().url().to_string();
         let result = async {
-            self.upload_gallery_image_with_progress(&gallery, check, progress_callback).await?;
+            self.upload_gallery_image_with_progress(&gallery, check, progress_callback)
+                .await
+                .map_err(|e| anyhow!("上传画廊图片失败，跳过整个画廊: {}", e))?;
 
             let article = self.publish_telegraph_article(&gallery).await?;
             let text = self.create_message_text(&gallery, &article.url).await?;
@@ -669,7 +671,7 @@ impl ExloliUploader {
                                 },
                                 Err(e) => {
                                     error!("下载预览图也失败 {}: {}", page.page(), e);
-                                    return Err(anyhow!("图片 {} 原图和预览图都下载失败: {}", page.page(), e));
+                                    return Err(anyhow!("图片 {} 原图和预览图都下载失败，跳过整个画廊: {}", page.page(), e));
                                 }
                             }
                         } else if let Some(b) = bytes {
@@ -717,7 +719,7 @@ impl ExloliUploader {
                                 },
                                 Err(e) => {
                                     error!("下载预览图失败 {}: {}", page.page(), e);
-                                    return Err(anyhow!("图片 {} 原图和预览图都下载失败: {}", page.page(), e));
+                                    return Err(anyhow!("图片 {} 原图和预览图都下载失败，跳过整个画廊: {}", page.page(), e));
                                 }
                             }
                         } else {
