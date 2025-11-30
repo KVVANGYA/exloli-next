@@ -202,13 +202,26 @@ impl ExloliUploader {
                         error!("check_and_update 失败: {:?}\n{}", err, Backtrace::force_capture());
                     }
                     if let Err(err) = self.try_upload(&next, true).await {
-                        error_count += 1;
-                        error!("check_and_upload 失败: {:?}\n{}", err, Backtrace::force_capture());
-                        warn!("画廊 {} 处理失败，跳过本次，等待下次扫描重试", next.url());
-                        if let Err(notify_err) = std::panic::AssertUnwindSafe(
-                            self.notify_admins(&format!("自动上传失败\n\nURL: {}\n错误: {}", next.url(), err))
-                        ).catch_unwind().await {
-                            error!("通知管理员失败: {:?}", notify_err);
+                        // 检查错误是否包含跳过整个画廊的指示
+                        if err.to_string().contains("跳过整个画廊") {
+                            // 这种错误应该被记录但不影响其他画廊的处理
+                            error_count += 1;
+                            error!("画廊 {} 处理失败，跳过整个画廊: {:?}\n{}", next.url(), err, Backtrace::force_capture());
+                            warn!("画廊 {} 跳过，继续处理下一个画廊", next.url());
+                            if let Err(notify_err) = std::panic::AssertUnwindSafe(
+                                self.notify_admins(&format!("自动上传失败\n\nURL: {}\n错误: {}", next.url(), err))
+                            ).catch_unwind().await {
+                                error!("通知管理员失败: {:?}", notify_err);
+                            }
+                        } else {
+                            error_count += 1;
+                            error!("check_and_upload 失败: {:?}\n{}", err, Backtrace::force_capture());
+                            warn!("画廊 {} 处理失败，跳过本次，等待下次扫描重试", next.url());
+                            if let Err(notify_err) = std::panic::AssertUnwindSafe(
+                                self.notify_admins(&format!("自动上传失败\n\nURL: {}\n错误: {}", next.url(), err))
+                            ).catch_unwind().await {
+                                error!("通知管理员失败: {:?}", notify_err);
+                            }
                         }
                     }
                 })
