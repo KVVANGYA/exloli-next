@@ -211,8 +211,8 @@ impl ExloliUploader {
                     }
                     if let Err(err) = self.try_upload(&next, true).await {
                         // 检查错误是否包含跳过整个画廊的指示
+                        let error_str = err.to_string();
                         if is_skip_gallery_error(&err) {
-                            let error_str = err.to_string();
                             // 这种错误应该被记录但不影响其他画廊的处理
                             error_count += 1;
                             error!("画廊 {} 处理失败，跳过整个画廊: {:?}\n{}", next.url(), err, Backtrace::force_capture());
