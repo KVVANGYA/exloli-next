@@ -25,6 +25,14 @@ use crate::s3::S3Uploader;
 use crate::tags::EhTagTransDB;
 use crate::utils::pad_left;
 
+// 标记需要跳过整个画廊的错误，避免依赖具体错误描述
+const SKIP_GALLERY_MARKER: &str = "[SKIP_GALLERY]";
+
+fn is_skip_gallery_error(err: &anyhow::Error) -> bool {
+    let s = err.to_string();
+    s.contains(SKIP_GALLERY_MARKER) || s.contains("跳过整个画廊")
+}
+
 /// 带指数退避的重试机制
 async fn retry_with_backoff<T, E, F, Fut>(max_retries: usize, mut func: F) -> Result<T, E>
 where
@@ -203,8 +211,8 @@ impl ExloliUploader {
                     }
                     if let Err(err) = self.try_upload(&next, true).await {
                         // 检查错误是否包含跳过整个画廊的指示
-                        let error_str = err.to_string();
-                        if error_str.contains("跳过整个画廊") {
+                        if is_skip_gallery_error(&err) {
+                            let error_str = err.to_string();
                             // 这种错误应该被记录但不影响其他画廊的处理
                             error_count += 1;
                             error!("画廊 {} 处理失败，跳过整个画廊: {:?}\n{}", next.url(), err, Backtrace::force_capture());
@@ -290,7 +298,13 @@ impl ExloliUploader {
         let result = async {
             self.upload_gallery_image_with_progress(&gallery, check, progress_callback)
                 .await
-                .map_err(|e| anyhow!("上传画廊图片失败，跳过整个画廊: {}", e))?;
+                .map_err(|e| {
+                    if is_skip_gallery_error(&e) {
+                        e
+                    } else {
+                        anyhow!("{} 上传画廊图片失败: {}", SKIP_GALLERY_MARKER, e)
+                    }
+                })?;
 
             let article = self.publish_telegraph_article(&gallery).await?;
             let text = self.create_message_text(&gallery, &article.url).await?;
@@ -317,7 +331,7 @@ impl ExloliUploader {
         if let Err(e) = result {
             // 检查错误是否包含跳过整个画廊的指示
             let error_str = e.to_string();
-            if error_str.contains("跳过整个画廊") {
+            if is_skip_gallery_error(&e) {
                 // 传播错误以跳过整个画廊
                 warn!("画廊 {} 处理失败，跳过整个画廊: {}", gallery_url, error_str);
                 return Err(e);
@@ -671,7 +685,12 @@ impl ExloliUploader {
                                 },
                                 Err(e) => {
                                     error!("下载预览图也失败 {}: {}", page.page(), e);
-                                    return Err(anyhow!("图片 {} 原图和预览图都下载失败，跳过整个画廊: {}", page.page(), e));
+                                    return Err(anyhow!(
+                                        "{} 图片 {} 原图和预览图都下载失败: {}",
+                                        SKIP_GALLERY_MARKER,
+                                        page.page(),
+                                        e
+                                    ));
                                 }
                             }
                         } else if let Some(b) = bytes {
@@ -719,13 +738,22 @@ impl ExloliUploader {
                                 },
                                 Err(e) => {
                                     error!("下载预览图失败 {}: {}", page.page(), e);
-                                    return Err(anyhow!("图片 {} 原图和预览图都下载失败，跳过整个画廊: {}", page.page(), e));
+                                    return Err(anyhow!(
+                                        "{} 图片 {} 原图和预览图都下载失败: {}",
+                                        SKIP_GALLERY_MARKER,
+                                        page.page(),
+                                        e
+                                    ));
                                 }
                             }
                         } else {
                             error!("图片 {} 没有任何可用的下载源", page.page());
                             // 当任何一张图片无法下载时，应该跳过整个画廊
-                            return Err(anyhow!("图片 {} 没有任何可用的下载源，跳过整个画廊", page.page()));
+                            return Err(anyhow!(
+                                "{} 图片 {} 没有任何可用的下载源",
+                                SKIP_GALLERY_MARKER,
+                                page.page()
+                            ));
                         };
 
                         let bytes = final_bytes.unwrap();
@@ -753,7 +781,12 @@ impl ExloliUploader {
                             Err(e) => {
                                 error!("上传图片失败 {} (重试后仍失败): {}", page.page(), e);
                                 // 当任何一张图片上传失败时，应该跳过整个画廊
-                                return Err(anyhow!("上传图片失败 {} (重试后仍失败)，跳过整个画廊: {}", page.page(), e));
+                                return Err(anyhow!(
+                                    "{} 上传图片失败 {} (重试后仍失败): {}",
+                                    SKIP_GALLERY_MARKER,
+                                    page.page(),
+                                    e
+                                ));
                             }
                         };
                         debug!("已上传: {} (hash: {}) {}", page.page(), page.hash(), if used_preview { "（预览图）" } else { "" });
@@ -769,12 +802,22 @@ impl ExloliUploader {
                         if let Err(e) = ImageEntity::create(fileindex, page.hash(), &upload_url).await {
                             error!("保存图片记录失败 {}: {}", page.page(), e);
                             // 当任何一张图片保存失败时，应该跳过整个画廊
-                            return Err(anyhow!("保存图片记录失败 {}，跳过整个画廊: {}", page.page(), e));
+                            return Err(anyhow!(
+                                "{} 保存图片记录失败 {}: {}",
+                                SKIP_GALLERY_MARKER,
+                                page.page(),
+                                e
+                            ));
                         }
                         if let Err(e) = PageEntity::create(page.gallery_id(), page.page(), fileindex).await {
                             error!("保存页面记录失败 {}: {}", page.page(), e);
                             // 当任何一张图片保存失败时，应该跳过整个画廊
-                            return Err(anyhow!("保存页面记录失败 {}，跳过整个画廊: {}", page.page(), e));
+                            return Err(anyhow!(
+                                "{} 保存页面记录失败 {}: {}",
+                                SKIP_GALLERY_MARKER,
+                                page.page(),
+                                e
+                            ));
                         }
                     }
                     Result::<()>::Ok(())
