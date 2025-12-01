@@ -530,6 +530,7 @@ impl ExloliUploader {
             let progress_clone = progress.clone();
             let callback_clone = callback_arc.clone();
             let s3_clone = s3.clone();
+            let cancelled_clone = cancelled.clone();
             
             let client = Client::builder()
                 .timeout(Duration::from_secs(30))
@@ -539,11 +540,17 @@ impl ExloliUploader {
             let handle = tokio::spawn(
                 async move {
                     loop {
+                        if cancelled_clone.load(Ordering::Relaxed) {
+                            break;
+                        }
                         // 获取下一个任务
                         let task = {
                             let mut rx_guard = rx.lock().await;
                             rx_guard.recv().await
                         };
+                        if cancelled_clone.load(Ordering::Relaxed) {
+                            break;
+                        }
                         
                         let (page, (fileindex, original_url)) = match task {
                             Some(data) => data,
@@ -685,6 +692,7 @@ impl ExloliUploader {
                                 },
                                 Err(e) => {
                                     error!("下载预览图也失败 {}: {}", page.page(), e);
+                                    cancelled_clone.store(true, Ordering::Relaxed);
                                     return Err(anyhow!(
                                         "{} 图片 {} 原图和预览图都下载失败: {}",
                                         SKIP_GALLERY_MARKER,
@@ -749,6 +757,7 @@ impl ExloliUploader {
                         } else {
                             error!("图片 {} 没有任何可用的下载源", page.page());
                             // 当任何一张图片无法下载时，应该跳过整个画廊
+                            cancelled_clone.store(true, Ordering::Relaxed);
                             return Err(anyhow!(
                                 "{} 图片 {} 没有任何可用的下载源",
                                 SKIP_GALLERY_MARKER,
@@ -781,6 +790,7 @@ impl ExloliUploader {
                             Err(e) => {
                                 error!("上传图片失败 {} (重试后仍失败): {}", page.page(), e);
                                 // 当任何一张图片上传失败时，应该跳过整个画廊
+                                cancelled_clone.store(true, Ordering::Relaxed);
                                 return Err(anyhow!(
                                     "{} 上传图片失败 {} (重试后仍失败): {}",
                                     SKIP_GALLERY_MARKER,
@@ -802,6 +812,7 @@ impl ExloliUploader {
                         if let Err(e) = ImageEntity::create(fileindex, page.hash(), &upload_url).await {
                             error!("保存图片记录失败 {}: {}", page.page(), e);
                             // 当任何一张图片保存失败时，应该跳过整个画廊
+                            cancelled_clone.store(true, Ordering::Relaxed);
                             return Err(anyhow!(
                                 "{} 保存图片记录失败 {}: {}",
                                 SKIP_GALLERY_MARKER,
@@ -812,6 +823,7 @@ impl ExloliUploader {
                         if let Err(e) = PageEntity::create(page.gallery_id(), page.page(), fileindex).await {
                             error!("保存页面记录失败 {}: {}", page.page(), e);
                             // 当任何一张图片保存失败时，应该跳过整个画廊
+                            cancelled_clone.store(true, Ordering::Relaxed);
                             return Err(anyhow!(
                                 "{} 保存页面记录失败 {}: {}",
                                 SKIP_GALLERY_MARKER,
