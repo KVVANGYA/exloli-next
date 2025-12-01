@@ -610,7 +610,7 @@ impl ExloliUploader {
                         };
 
                         // 下载图片（带网络重试机制和内容验证）
-                        let bytes = retry_network_operation_with_limit(
+                        let bytes = match retry_network_operation_with_limit(
                             &format!("下载图片 {}", page.page()), 7,
                             || async {
                                 let response = client.get(&download_url).send().await?;
@@ -644,10 +644,19 @@ impl ExloliUploader {
                                 
                                 Ok(bytes)
                             }
-                        ).await.map_err(|e| {
-                            error!("下载图片失败 {}: {}", page.page(), e);
-                            e
-                        }).ok();
+                        ).await {
+                            Ok(b) => Some(b),
+                            Err(e) => {
+                                error!("下载图片失败 {} (重试后仍失败): {}", page.page(), e);
+                                cancelled_clone.store(true, Ordering::Relaxed);
+                                return Err(anyhow!(
+                                    "{} 下载图片失败 {} (重试后仍失败): {}",
+                                    SKIP_GALLERY_MARKER,
+                                    page.page(),
+                                    e
+                                ));
+                            }
+                        };
 
                         // 如果压缩图片下载失败，尝试使用预览图
                         let (final_bytes, final_filename, used_preview) = if bytes.is_none() && preview_url.is_some() {
