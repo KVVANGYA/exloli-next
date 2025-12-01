@@ -647,14 +647,15 @@ impl ExloliUploader {
                         ).await {
                             Ok(b) => Some(b),
                             Err(e) => {
-                                error!("下载图片失败 {} (重试后仍失败): {}", page.page(), e);
-                                cancelled_clone.store(true, Ordering::Relaxed);
-                                return Err(anyhow!(
+                                let msg = format!(
                                     "{} 下载图片失败 {} (重试后仍失败): {}",
                                     SKIP_GALLERY_MARKER,
                                     page.page(),
                                     e
-                                ));
+                                );
+                                error!("{}", msg);
+                                cancelled_clone.store(true, Ordering::Relaxed);
+                                return Err(anyhow!(msg));
                             }
                         };
 
