@@ -619,7 +619,8 @@ impl ExloliUploader {
                                 if let Some(content_type) = response.headers().get("content-type") {
                                     if let Ok(ct_str) = content_type.to_str() {
                                         if !ct_str.starts_with("image/") && !ct_str.contains("octet-stream") {
-                                            return Err(anyhow!("响应不是图片类型，Content-Type: {}", ct_str));
+                                            let msg = format!("{} 响应不是图片类型，Content-Type: {}", SKIP_GALLERY_MARKER, ct_str);
+                                            return Err(anyhow!(msg));
                                         }
                                     }
                                 }
@@ -634,11 +635,13 @@ impl ExloliUploader {
                                        content_lower.starts_with("<html") ||
                                        content_lower.contains("<title>") ||
                                        content_lower.contains("<form") {
-                                        return Err(anyhow!("下载到的是HTML页面而不是图片"));
+                                        let msg = format!("{} 下载到的是HTML页面而不是图片", SKIP_GALLERY_MARKER);
+                                        return Err(anyhow!(msg));
                                     }
                                     if (content_lower.starts_with("{") && content_lower.contains("\"status\"") && content_lower.contains("\"error\"")) ||
                                        (content_lower.starts_with("{") && content_lower.contains("\"code\"") && content_lower.contains("\"message\"")) {
-                                        return Err(anyhow!("images.weserv.nl返回错误响应: {}", content_start));
+                                        let msg = format!("{} images.weserv.nl返回错误响应: {}", SKIP_GALLERY_MARKER, content_start);
+                                        return Err(anyhow!(msg));
                                     }
                                 }
                                 
@@ -674,7 +677,8 @@ impl ExloliUploader {
                                         if let Ok(ct_str) = content_type.to_str() {
                                             debug!("预览图Content-Type: {}", ct_str);
                                             if !ct_str.starts_with("image/") && !ct_str.contains("octet-stream") {
-                                                return Err(anyhow!("预览图响应不是图片类型，Content-Type: {}", ct_str));
+                                                let msg = format!("{} 预览图响应不是图片类型，Content-Type: {}", SKIP_GALLERY_MARKER, ct_str);
+                                                return Err(anyhow!(msg));
                                             }
                                         }
                                     }
@@ -686,10 +690,11 @@ impl ExloliUploader {
                                         let content_start = String::from_utf8_lossy(&preview_bytes[..std::cmp::min(200, preview_bytes.len())]);
                                         let content_lower = content_start.trim_start().to_lowercase();
                                         if content_lower.starts_with("<!doctype html") || 
-                                           content_lower.starts_with("<html") ||
-                                           content_lower.contains("<title>") ||
-                                           content_lower.contains("<form") {
-                                            return Err(anyhow!("下载到的是HTML页面而不是图片"));
+                                       content_lower.starts_with("<html") ||
+                                       content_lower.contains("<title>") ||
+                                       content_lower.contains("<form") {
+                                            let msg = format!("{} 下载到的是HTML页面而不是图片", SKIP_GALLERY_MARKER);
+                                            return Err(anyhow!(msg));
                                         }
                                     }
                                     
@@ -701,14 +706,15 @@ impl ExloliUploader {
                                     (Some(preview_bytes), format!("{}_preview.{}", page.hash(), preview_suffix), true)
                                 },
                                 Err(e) => {
-                                    error!("下载预览图也失败 {}: {}", page.page(), e);
-                                    cancelled_clone.store(true, Ordering::Relaxed);
-                                    return Err(anyhow!(
+                                    let msg = format!(
                                         "{} 图片 {} 原图和预览图都下载失败: {}",
                                         SKIP_GALLERY_MARKER,
                                         page.page(),
                                         e
-                                    ));
+                                    );
+                                    error!("{}", msg);
+                                    cancelled_clone.store(true, Ordering::Relaxed);
+                                    return Err(anyhow!(msg));
                                 }
                             }
                         } else if let Some(b) = bytes {
@@ -728,7 +734,8 @@ impl ExloliUploader {
                                         if let Ok(ct_str) = content_type.to_str() {
                                             debug!("预览图Content-Type: {}", ct_str);
                                             if !ct_str.starts_with("image/") && !ct_str.contains("octet-stream") {
-                                                return Err(anyhow!("预览图响应不是图片类型，Content-Type: {}", ct_str));
+                                                let msg = format!("{} 预览图响应不是图片类型，Content-Type: {}", SKIP_GALLERY_MARKER, ct_str);
+                                                return Err(anyhow!(msg));
                                             }
                                         }
                                     }
@@ -740,10 +747,11 @@ impl ExloliUploader {
                                         let content_start = String::from_utf8_lossy(&preview_bytes[..std::cmp::min(200, preview_bytes.len())]);
                                         let content_lower = content_start.trim_start().to_lowercase();
                                         if content_lower.starts_with("<!doctype html") || 
-                                           content_lower.starts_with("<html") ||
-                                           content_lower.contains("<title>") ||
-                                           content_lower.contains("<form") {
-                                            return Err(anyhow!("下载到的是HTML页面而不是图片"));
+                                       content_lower.starts_with("<html") ||
+                                       content_lower.contains("<title>") ||
+                                       content_lower.contains("<form") {
+                                            let msg = format!("{} 下载到的是HTML页面而不是图片", SKIP_GALLERY_MARKER);
+                                            return Err(anyhow!(msg));
                                         }
                                     }
                                     
