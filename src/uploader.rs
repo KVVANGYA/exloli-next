@@ -94,6 +94,10 @@ where
                 return Ok(result);
             }
             Err(err) => {
+                // 如果错误已标记跳过整个画廊，则立刻返回不再重试
+                if format!("{}", err).contains(SKIP_GALLERY_MARKER) {
+                    return Err(err);
+                }
                 if attempt >= max_retries {
                     error!("{} 重试 {} 次后仍失败: {}", operation_name, max_retries, err);
                     return Err(err);
