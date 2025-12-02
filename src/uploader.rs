@@ -336,9 +336,9 @@ impl ExloliUploader {
             // 检查错误是否包含跳过整个画廊的指示
             let error_str = e.to_string();
             if is_skip_gallery_error(&e) {
-                // 传播错误以跳过整个画廊
+                // 仅记录警告并跳过该画廊，避免向上抛错中断流程
                 warn!("画廊 {} 处理失败，跳过整个画廊: {}", gallery_url, error_str);
-                return Err(e);
+                return Ok(());
             } else {
                 // 其他错误可以记录并跳过
                 warn!("画廊 {} 处理失败，跳过本次上传: {}", gallery_url, error_str);
