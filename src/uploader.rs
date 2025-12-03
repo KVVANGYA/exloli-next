@@ -297,7 +297,7 @@ impl ExloliUploader {
         let gallery = self.ehentai.get_gallery(gallery).await?;
 
         // 把整个画廊处理包裹起来；任一步失败直接跳过本画廊，避免终止扫描循环
-        // 但如果是因为图片问题导致的失败，则应该传播错误以跳过整个画廊
+        // 但是如果是因为图片问题导致的失败，则应该传播错误以跳过整个画廊
         let gallery_url = gallery.url().url().to_string();
         let result = async {
             self.upload_gallery_image_with_progress(&gallery, check, progress_callback)
@@ -654,19 +654,18 @@ impl ExloliUploader {
                         ).await {
                             Ok(b) => Some(b),
                             Err(e) => {
-                                let msg = format!(
-                                    "{} 下载图片失败 {} (重试后仍失败): {}",
-                                    SKIP_GALLERY_MARKER,
-                                    page.page(),
-                                    e
-                                );
+                                // 检查错误是否已经包含跳过画廊标记，避免重复添加
+                                let error_str = e.to_string();
+                                let msg = if is_skip_gallery_error(&e) {
+                                    format!("下载图片失败 {} (重试后仍失败): {}", page.page(), error_str)
+                                } else {
+                                    format!("{} 下载图片失败 {} (重试后仍失败): {}", SKIP_GALLERY_MARKER, page.page(), error_str)
+                                };
                                 error!("{}", msg);
                                 cancelled_clone.store(true, Ordering::Relaxed);
                                 return Err(anyhow!(msg));
                             }
-                        };
-
-                        // 如果压缩图片下载失败，尝试使用预览图
+                        };                        // 如果压缩图片下载失败，尝试使用预览图
                         let (final_bytes, final_filename, used_preview) = if bytes.is_none() && preview_url.is_some() {
                             let preview = preview_url.unwrap();
                             info!("原图下载失败，使用预览图作为备用方案: {}", preview);
@@ -768,23 +767,26 @@ impl ExloliUploader {
                                 },
                                 Err(e) => {
                                     error!("下载预览图失败 {}: {}", page.page(), e);
-                                    return Err(anyhow!(
-                                        "{} 图片 {} 原图和预览图都下载失败: {}",
-                                        SKIP_GALLERY_MARKER,
-                                        page.page(),
-                                        e
-                                    ));
-                                }
+                                    // 检查错误是否已经包含跳过画廊标记，避免重复添加
+                                    let error_str = e.to_string();
+                                    let msg = if is_skip_gallery_error(&e) {
+                                        format!("图片 {} 原图和预览图都下载失败: {}", page.page(), error_str)
+                                    } else {
+                                        format!("{} 图片 {} 原图和预览图都下载失败: {}", SKIP_GALLERY_MARKER, page.page(), error_str)
+                                    };
+                                    return Err(anyhow!(msg));                                }
                             }
                         } else {
                             error!("图片 {} 没有任何可用的下载源", page.page());
                             // 当任何一张图片无法下载时，应该跳过整个画廊
                             cancelled_clone.store(true, Ordering::Relaxed);
-                            return Err(anyhow!(
-                                "{} 图片 {} 没有任何可用的下载源",
-                                SKIP_GALLERY_MARKER,
-                                page.page()
-                            ));
+                            // 检查错误是否已经包含跳过画廊标记，避免重复添加
+                            let msg = if is_skip_gallery_error(&anyhow::anyhow!("图片 {} 没有任何可用的下载源", page.page())) {
+                                format!("图片 {} 没有任何可用的下载源", page.page())
+                            } else {
+                                format!("{} 图片 {} 没有任何可用的下载源", SKIP_GALLERY_MARKER, page.page())
+                            };
+                            return Err(anyhow!(msg));
                         };
 
                         let bytes = final_bytes.unwrap();
@@ -813,12 +815,14 @@ impl ExloliUploader {
                                 error!("上传图片失败 {} (重试后仍失败): {}", page.page(), e);
                                 // 当任何一张图片上传失败时，应该跳过整个画廊
                                 cancelled_clone.store(true, Ordering::Relaxed);
-                                return Err(anyhow!(
-                                    "{} 上传图片失败 {} (重试后仍失败): {}",
-                                    SKIP_GALLERY_MARKER,
-                                    page.page(),
-                                    e
-                                ));
+                                // 检查错误是否已经包含跳过画廊标记，避免重复添加
+                                let error_str = e.to_string();
+                                let msg = if is_skip_gallery_error(&e) {
+                                    format!("上传图片失败 {} (重试后仍失败): {}", page.page(), error_str)
+                                } else {
+                                    format!("{} 上传图片失败 {} (重试后仍失败): {}", SKIP_GALLERY_MARKER, page.page(), error_str)
+                                };
+                                return Err(anyhow!(msg));
                             }
                         };
                         debug!("已上传: {} (hash: {}) {}", page.page(), page.hash(), if used_preview { "（预览图）" } else { "" });
@@ -835,23 +839,25 @@ impl ExloliUploader {
                             error!("保存图片记录失败 {}: {}", page.page(), e);
                             // 当任何一张图片保存失败时，应该跳过整个画廊
                             cancelled_clone.store(true, Ordering::Relaxed);
-                            return Err(anyhow!(
-                                "{} 保存图片记录失败 {}: {}",
-                                SKIP_GALLERY_MARKER,
-                                page.page(),
-                                e
-                            ));
+                            // 检查错误是否已经包含跳过画廊标记，避免重复添加
+                            let error_msg = if e.to_string().contains(SKIP_GALLERY_MARKER) {
+                                format!("保存图片记录失败 {}: {}", page.page(), e)
+                            } else {
+                                format!("{} 保存图片记录失败 {}: {}", SKIP_GALLERY_MARKER, page.page(), e)
+                            };
+                            return Err(anyhow!("{}", error_msg));
                         }
                         if let Err(e) = PageEntity::create(page.gallery_id(), page.page(), fileindex).await {
                             error!("保存页面记录失败 {}: {}", page.page(), e);
                             // 当任何一张图片保存失败时，应该跳过整个画廊
                             cancelled_clone.store(true, Ordering::Relaxed);
-                            return Err(anyhow!(
-                                "{} 保存页面记录失败 {}: {}",
-                                SKIP_GALLERY_MARKER,
-                                page.page(),
-                                e
-                            ));
+                            // 检查错误是否已经包含跳过画廊标记，避免重复添加
+                            let error_msg = if e.to_string().contains(SKIP_GALLERY_MARKER) {
+                                format!("保存页面记录失败 {}: {}", page.page(), e)
+                            } else {
+                                format!("{} 保存页面记录失败 {}: {}", SKIP_GALLERY_MARKER, page.page(), e)
+                            };
+                            return Err(anyhow!("{}", error_msg));
                         }
                     }
                     Result::<()>::Ok(())
