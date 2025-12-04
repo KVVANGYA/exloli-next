@@ -709,12 +709,13 @@ impl ExloliUploader {
                                     (Some(preview_bytes), format!("{}_preview.{}", page.hash(), preview_suffix), true)
                                 },
                                 Err(e) => {
-                                    let msg = format!(
-                                        "{} 图片 {} 原图和预览图都下载失败: {}",
-                                        SKIP_GALLERY_MARKER,
-                                        page.page(),
-                                        e
-                                    );
+                                    // 检查错误是否已经包含跳过画廊标记，避免重复添加
+                                    let error_str = e.to_string();
+                                    let msg = if error_str.contains(SKIP_GALLERY_MARKER) {
+                                        format!("图片 {} 原图和预览图都下载失败: {}", page.page(), error_str)
+                                    } else {
+                                        format!("{} 图片 {} 原图和预览图都下载失败: {}", SKIP_GALLERY_MARKER, page.page(), error_str)
+                                    };
                                     error!("{}", msg);
                                     cancelled_clone.store(true, Ordering::Relaxed);
                                     return Err(anyhow!(msg));
@@ -840,10 +841,11 @@ impl ExloliUploader {
                             // 当任何一张图片保存失败时，应该跳过整个画廊
                             cancelled_clone.store(true, Ordering::Relaxed);
                             // 检查错误是否已经包含跳过画廊标记，避免重复添加
-                            let error_msg = if e.to_string().contains(SKIP_GALLERY_MARKER) {
-                                format!("保存图片记录失败 {}: {}", page.page(), e)
+                            let e_str = e.to_string();
+                            let error_msg = if e_str.contains(SKIP_GALLERY_MARKER) {
+                                format!("保存图片记录失败 {}: {}", page.page(), e_str)
                             } else {
-                                format!("{} 保存图片记录失败 {}: {}", SKIP_GALLERY_MARKER, page.page(), e)
+                                format!("{} 保存图片记录失败 {}: {}", SKIP_GALLERY_MARKER, page.page(), e_str)
                             };
                             return Err(anyhow!("{}", error_msg));
                         }
@@ -852,10 +854,11 @@ impl ExloliUploader {
                             // 当任何一张图片保存失败时，应该跳过整个画廊
                             cancelled_clone.store(true, Ordering::Relaxed);
                             // 检查错误是否已经包含跳过画廊标记，避免重复添加
-                            let error_msg = if e.to_string().contains(SKIP_GALLERY_MARKER) {
-                                format!("保存页面记录失败 {}: {}", page.page(), e)
+                            let e_str = e.to_string();
+                            let error_msg = if e_str.contains(SKIP_GALLERY_MARKER) {
+                                format!("保存页面记录失败 {}: {}", page.page(), e_str)
                             } else {
-                                format!("{} 保存页面记录失败 {}: {}", SKIP_GALLERY_MARKER, page.page(), e)
+                                format!("{} 保存页面记录失败 {}: {}", SKIP_GALLERY_MARKER, page.page(), e_str)
                             };
                             return Err(anyhow!("{}", error_msg));
                         }
