@@ -13,6 +13,16 @@ use teloxide::types::ParseMode;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if env::var("IS_DAEMON_CHILD").is_ok() {
+        // 作为守护进程的子进程运行
+        run_app().await
+    } else {
+        // 作为守护进程本身运行
+        exloli_next::daemon::start_daemon(env::current_exe()?.to_str().unwrap()).await
+    }
+}
+
+pub async fn run_app() -> Result<()> {
     let config = Config::new("./config.toml")?;
     CHANNEL_ID.set(config.telegram.channel_id.to_string()).unwrap();
 

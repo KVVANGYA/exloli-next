@@ -625,6 +625,7 @@ impl ExloliUploader {
                                     if let Ok(ct_str) = content_type.to_str() {
                                         if !ct_str.starts_with("image/") && !ct_str.contains("octet-stream") {
                                             let msg = format!("{} 响应不是图片类型，Content-Type: {}", SKIP_GALLERY_MARKER, ct_str);
+                                            cancelled.store(true, Ordering::Relaxed); // Signal cancellation
                                             return Err(anyhow!(msg));
                                         }
                                     }
@@ -641,11 +642,13 @@ impl ExloliUploader {
                                        content_lower.contains("<title>") ||
                                        content_lower.contains("<form") {
                                         let msg = format!("{} 下载到的是HTML页面而不是图片", SKIP_GALLERY_MARKER);
+                                        cancelled.store(true, Ordering::Relaxed); // Signal cancellation
                                         return Err(anyhow!(msg));
                                     }
                                     if (content_lower.starts_with("{") && content_lower.contains("\"status\"") && content_lower.contains("\"error\"")) ||
                                        (content_lower.starts_with("{") && content_lower.contains("\"code\"") && content_lower.contains("\"message\"")) {
                                         let msg = format!("{} images.weserv.nl返回错误响应: {}", SKIP_GALLERY_MARKER, content_start);
+                                        cancelled.store(true, Ordering::Relaxed); // Signal cancellation
                                         return Err(anyhow!(msg));
                                     }
                                 }
