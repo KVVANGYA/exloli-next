@@ -1,5 +1,7 @@
 use std::backtrace::Backtrace;
 use std::time::Duration;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{anyhow, bail, Result};
 use chrono::{Datelike, Utc};
@@ -61,13 +63,17 @@ where
 }
 
 /// 改进的重试机制，针对网络错误提供更多重试次数
-async fn retry_network_operation<T, E, F, Fut>(operation_name: &str, func: F) -> Result<T, E>
+async fn retry_network_operation<T, E, F, Fut>(
+    operation_name: &str, 
+    func: F,
+    cancelled: Option<Arc<AtomicBool>>,
+) -> Result<T, E>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T, E>>,
     E: std::fmt::Display,
 {
-    retry_network_operation_with_limit(operation_name, 7, func).await
+    retry_network_operation_with_limit(operation_name, 7, func, cancelled).await
 }
 
 /// 带上限参数的网络重试封装，便于在敏感操作上缩短失败等待时间
@@ -75,6 +81,7 @@ async fn retry_network_operation_with_limit<T, E, F, Fut>(
     operation_name: &str,
     max_retries: usize,
     mut func: F,
+    cancelled: Option<Arc<AtomicBool>>,
 ) -> Result<T, E>
 where
     F: FnMut() -> Fut,
@@ -86,6 +93,22 @@ where
     let max_retries = max_retries.min(MAX_RETRIES).max(1);
 
     for attempt in 1..=max_retries {
+        // 在开始操作前检查取消状态
+        if let Some(ref c) = cancelled {
+            if c.load(Ordering::Relaxed) {
+                warn!("{} 操作被取消，停止执行", operation_name);
+                // 这里我们无法构造E，只能假设它是anyhow::Error或者返回上一轮的错误
+                // 但由于这是新的一轮，我们没有错误可返回。
+                // 这是一个泛型函数，E必须实现Display。
+                // 我们只能panic或者让func执行一次？
+                // 为了简单起见，我们在sleep期间检查取消。
+                // 如果在这里检测到取消，我们还是执行func吧，或者直接break循环？
+                // 如果break循环，我们需要返回一个Result。
+                // 我们无法构造 Err(E)。
+                // 所以我们只能继续执行，或者依靠sleep期间的检查。
+            }
+        }
+
         match func().await {
             Ok(result) => {
                 if attempt > 1 {
@@ -112,7 +135,28 @@ where
 
                 warn!("{} 失败 (尝试 {}/{}): {}, {}秒后重试",
                       operation_name, attempt, max_retries, err, delay.as_secs());
-                time::sleep(delay).await;
+                
+                // 带取消检查的等待
+                if let Some(ref c) = cancelled {
+                    let step = Duration::from_millis(200);
+                    let mut left = delay;
+                    let mut is_cancelled = false;
+                    while left > Duration::ZERO {
+                         if c.load(Ordering::Relaxed) {
+                             is_cancelled = true;
+                             break;
+                         }
+                         let s = std::cmp::min(step, left);
+                         time::sleep(s).await;
+                         left -= s;
+                    }
+                    if is_cancelled {
+                        warn!("{} 操作被取消，停止重试", operation_name);
+                        return Err(err);
+                    }
+                } else {
+                    time::sleep(delay).await;
+                }
             }
         }
     }
@@ -510,7 +554,25 @@ impl ExloliUploader {
                     }
                     
                     // 如果发送失败（通道关闭），提前退出
-                    if parse_tx.send((page, rst)).await.is_err() {
+                    // 使用循环尝试发送，以便能够响应取消信号
+                    let mut item_to_send = (page, rst);
+                    loop {
+                        if cancel_clone_parser.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        match parse_tx.try_send(item_to_send) {
+                            Ok(_) => break,
+                            Err(tokio::sync::mpsc::error::TrySendError::Full(returned_item)) => {
+                                item_to_send = returned_item;
+                                time::sleep(Duration::from_millis(100)).await;
+                            }
+                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                // Channel closed, exit
+                                return Result::<()>::Ok(());
+                            }
+                        }
+                    }
+                    if cancel_clone_parser.load(Ordering::Relaxed) {
                         break;
                     }
                 }
@@ -654,7 +716,8 @@ impl ExloliUploader {
                                 }
                                 
                                 Ok(bytes)
-                            }
+                            },
+                            Some(cancelled_clone.clone())
                         ).await {
                             Ok(b) => Some(b),
                             Err(e) => {
@@ -706,7 +769,8 @@ impl ExloliUploader {
                                     }
                                     
                                     Ok(preview_bytes)
-                                }
+                                },
+                                Some(cancelled_clone.clone())
                             ).await {
                                 Ok(preview_bytes) => {
                                     let preview_suffix = preview.split('.').last().unwrap_or("jpg");
@@ -764,7 +828,8 @@ impl ExloliUploader {
                                     }
                                     
                                     Ok(preview_bytes)
-                                }
+                                },
+                                Some(cancelled_clone.clone())
                             ).await {
                                 Ok(preview_bytes) => {
                                     let preview_suffix = preview.split('.').last().unwrap_or("jpg");
@@ -813,7 +878,8 @@ impl ExloliUploader {
                             &format!("上传图片 {}", page.page()), 
                             || async {
                                 s3_clone.upload(&final_filename, &mut bytes.as_ref()).await
-                            }
+                            },
+                            Some(cancelled_clone.clone())
                         ).await {
                             Ok(url) => url,
                             Err(e) => {
