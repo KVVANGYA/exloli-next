@@ -336,7 +336,8 @@ impl ExloliUploader {
             // 检查错误是否包含跳过整个画廊的指示
             let error_str = e.to_string();
             if is_skip_gallery_error(&e) {
-                // 仅记录警告并跳过该画廊，避免向上抛错中断流程
+                // 清理可能已写入的页面记录，避免发布不完整内容
+                let _ = PageEntity::delete_by_gallery(gallery.url.id()).await;
                 warn!("画廊 {} 处理失败，跳过整个画廊: {}", gallery_url, error_str);
                 return Ok(());
             } else {
