@@ -1,8 +1,9 @@
 pub mod bot;
 pub mod config;
 pub mod database;
+pub mod daemon;
 pub mod ehentai;
-mod s3;
+pub mod teletype_uploader;
 pub mod tags;
 pub mod uploader;
 pub mod utils;
