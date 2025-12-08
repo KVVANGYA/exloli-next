@@ -686,8 +686,7 @@ impl ExloliUploader {
                                 if let Some(content_type) = response.headers().get("content-type") {
                                     if let Ok(ct_str) = content_type.to_str() {
                                         if !ct_str.starts_with("image/") && !ct_str.contains("octet-stream") {
-                                            let msg = format!("{} 响应不是图片类型，Content-Type: {}", SKIP_GALLERY_MARKER, ct_str);
-                                            cancelled_clone.store(true, Ordering::Relaxed); // Signal cancellation
+                                            let msg = format!("响应不是图片类型，Content-Type: {}", ct_str);
                                             return Err(anyhow!(msg));
                                         }
                                     }
@@ -703,14 +702,12 @@ impl ExloliUploader {
                                        content_lower.starts_with("<html") ||
                                        content_lower.contains("<title>") ||
                                        content_lower.contains("<form") {
-                                        let msg = format!("{} 下载到的是HTML页面而不是图片", SKIP_GALLERY_MARKER);
-                                        cancelled_clone.store(true, Ordering::Relaxed); // Signal cancellation
+                                        let msg = format!("下载到的是HTML页面而不是图片");
                                         return Err(anyhow!(msg));
                                     }
                                     if (content_lower.starts_with("{") && content_lower.contains("\"status\"") && content_lower.contains("\"error\"")) ||
                                        (content_lower.starts_with("{") && content_lower.contains("\"code\"") && content_lower.contains("\"message\"")) {
-                                        let msg = format!("{} images.weserv.nl返回错误响应: {}", SKIP_GALLERY_MARKER, content_start);
-                                        cancelled_clone.store(true, Ordering::Relaxed); // Signal cancellation
+                                        let msg = format!("images.weserv.nl返回错误响应: {}", content_start);
                                         return Err(anyhow!(msg));
                                     }
                                 }
@@ -721,16 +718,22 @@ impl ExloliUploader {
                         ).await {
                             Ok(b) => Some(b),
                             Err(e) => {
-                                // 检查错误是否已经包含跳过画廊标记，避免重复添加
-                                let error_str = e.to_string();
-                                let msg = if is_skip_gallery_error(&e) {
-                                    format!("下载图片失败 {} (重试后仍失败): {}", page.page(), error_str)
+                                // 如果有预览图，尝试降级
+                                if preview_url.is_some() {
+                                    warn!("下载图片失败 {} (重试后仍失败)，准备尝试预览图: {}", page.page(), e);
+                                    None
                                 } else {
-                                    format!("{} 下载图片失败 {} (重试后仍失败): {}", SKIP_GALLERY_MARKER, page.page(), error_str)
-                                };
-                                error!("{}", msg);
-                                cancelled_clone.store(true, Ordering::Relaxed);
-                                return Err(anyhow!(msg));
+                                    // 检查错误是否已经包含跳过画廊标记，避免重复添加
+                                    let error_str = e.to_string();
+                                    let msg = if is_skip_gallery_error(&e) {
+                                        format!("下载图片失败 {} (重试后仍失败): {}", page.page(), error_str)
+                                    } else {
+                                        format!("{} 下载图片失败 {} (重试后仍失败): {}", SKIP_GALLERY_MARKER, page.page(), error_str)
+                                    };
+                                    error!("{}", msg);
+                                    cancelled_clone.store(true, Ordering::Relaxed);
+                                    return Err(anyhow!(msg));
+                                }
                             }
                         };                        // 如果压缩图片下载失败，尝试使用预览图
                         let (final_bytes, final_filename, used_preview) = if bytes.is_none() && preview_url.is_some() {
